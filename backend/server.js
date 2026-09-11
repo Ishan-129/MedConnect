@@ -8,6 +8,7 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { db, formatTo12Hour } from './db.js';
 import { processReceptionistTurn, getReceptionistConfigStatus, getWelcomeMessage } from './services/receptionistService.js';
 import { calculateAvailableSlots, getAllDoctorSlots, bookAppointment, bookEmergencyAppointment, cancelAppointment, getAppointments } from './services/appointmentService.js';
@@ -120,6 +121,18 @@ async function authenticateRequest(req) {
   return verifySession(token);
 }
 
+function getLocalNetworkIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
 const server = http.createServer(async (req, res) => {
   setCorsHeaders(res);
 
@@ -144,11 +157,24 @@ const server = http.createServer(async (req, res) => {
     // HEALTH CHECK
     // -------------------------------------------------------------
     if (pathname === '/' || pathname === '/api/health') {
+      const lanIp = getLocalNetworkIp();
       return sendJson(res, 200, {
         status: 'ok',
         service: 'MedConnect Pulse AI Receptionist Backend',
         version: '1.0.0',
+        lanIp,
+        baseUrl: `http://${lanIp}:5173`,
         timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (pathname === '/api/network-info' && req.method === 'GET') {
+      const lanIp = getLocalNetworkIp();
+      return sendJson(res, 200, {
+        ip: lanIp,
+        frontendPort: 5173,
+        backendPort: PORT,
+        baseUrl: `http://${lanIp}:5173`,
       });
     }
 
@@ -161,7 +187,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/receptionist/welcome' && req.method === 'GET') {
-      const lang = reqUrl.searchParams.get('lang') || 'Hinglish';
+      const lang = reqUrl.searchParams.get('lang') || 'English';
       return sendJson(res, 200, { welcomeMessage: getWelcomeMessage(lang) });
     }
 
@@ -171,7 +197,7 @@ const server = http.createServer(async (req, res) => {
         channel: body.channel || 'text',
         text: body.text,
         audioBlob: body.audioBlob,
-        language: body.language || 'Hinglish',
+        language: body.language || 'English',
         hospitalId: body.hospitalId,
         patientName: body.patientName,
         patientPhone: body.patientPhone,
@@ -389,12 +415,14 @@ const server = http.createServer(async (req, res) => {
       let phone = reqUrl.searchParams.get('phone') || reqUrl.searchParams.get('patientPhone');
       const status = reqUrl.searchParams.get('status');
 
+      const userRole = auth.user?.role?.toLowerCase();
+
       // Patient Isolation: If request is authenticated as a patient, STRICTLY scope to their identity
-      if (auth.valid && auth.user?.role === 'patient') {
-        patientId = auth.user.id;
+      if (auth.valid && userRole === 'patient') {
+        patientId = auth.user.patient_id || auth.user.id;
         phone = auth.user.phone || phone;
-      } else if (auth.valid && auth.user?.role === 'hospital') {
-        hospitalId = hospitalId || auth.user.id;
+      } else if (auth.valid && (userRole === 'hospital' || userRole === 'receptionist')) {
+        hospitalId = hospitalId || auth.user.hospital_id || auth.user.id;
       } else if (!auth.valid && !patientId && !phone && !hospitalId && !doctorId) {
         // Prevent unauthenticated full data dump of all patient appointments
         return sendJson(res, 200, { success: true, count: 0, appointments: [] });
@@ -408,7 +436,26 @@ const server = http.createServer(async (req, res) => {
         status,
       });
 
-      return sendJson(res, 200, { success: true, count: appointments.length, appointments });
+      // Defense-in-depth: if filtered by patient or authenticated as patient, guarantee only their records are returned
+      let finalAppointments = appointments;
+      if (patientId || phone) {
+        const cleanReqPhone = phone ? phone.replace(/\D/g, '') : null;
+        finalAppointments = appointments.filter(a => {
+          const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+          if (patientId && aPatId && (aPatId === patientId || aPatId === auth.user?.id || aPatId === auth.user?.patient_id)) {
+            return true;
+          }
+          if (cleanReqPhone) {
+            const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+            if (aPhone && (aPhone === cleanReqPhone || (cleanReqPhone.length >= 10 && aPhone.endsWith(cleanReqPhone.slice(-10))) || (aPhone.length >= 10 && cleanReqPhone.endsWith(aPhone.slice(-10))))) {
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+
+      return sendJson(res, 200, { success: true, count: finalAppointments.length, appointments: finalAppointments });
     }
 
     if (pathname === '/api/appointments/check' && req.method === 'GET') {
@@ -472,6 +519,31 @@ const server = http.createServer(async (req, res) => {
       const action = isCheckInRoute ? 'check_in' : (body.action || 'verify');
       const passType = body.type || (typeof qrData === 'object' && qrData?.type);
 
+      // Check-in security policy:
+      // 1. User must be logged in OR present an authentic scanned QR pass / check-in URL
+      // 2. Patient role without QR code cannot manually check in arbitrary tokens (reserved for staff)
+      if (action === 'check_in') {
+        const hasQrPass = Boolean(qrData || (body.sig && (tokenId || appointmentId)));
+        if (!user && !hasQrPass) {
+          return sendJson(res, 401, {
+            success: false,
+            status: 'FORBIDDEN',
+            code: 'LOGIN_REQUIRED',
+            message: 'User must be logged in to check in, or present an authentic appointment QR pass.',
+          });
+        }
+
+        const isStaff = user && ['hospital', 'receptionist', 'doctor', 'emergency_manager', 'admin'].includes(user.role?.toLowerCase());
+        if (user && user.role === 'patient' && !hasQrPass && !isStaff) {
+          return sendJson(res, 400, {
+            success: false,
+            status: 'INVALID',
+            code: 'SCAN_REQUIRED',
+            message: 'Patients can only check in by scanning their QR code. Manual check-in by appointment number is reserved for hospital reception staff.',
+          });
+        }
+      }
+
       let result;
       if (passType === 'emergency_dispatch') {
         result = await db.verifyAndRedeemDispatchPass({
@@ -498,6 +570,21 @@ const server = http.createServer(async (req, res) => {
         statusCode = 400;
       } else if (result.status === 'NOT FOUND') {
         statusCode = 404;
+      }
+
+      // If check-in succeeded from a scanned QR pass on a mobile phone without prior login,
+      // generate a patient session so the client can automatically track their queue
+      if (result.success && !user && result.appointment) {
+        const cleanName = (result.appointment.patient_name || 'Patient').replace(/\*+/g, '') || 'Patient';
+        const cleanPhone = (result.appointment.patient_phone || '').replace(/\*+/g, '');
+        const patUser = {
+          id: result.appointment.patient_id || result.appointment.appointment_id || 'patient-user',
+          name: cleanName,
+          phone: cleanPhone,
+          role: 'patient',
+        };
+        result.user = patUser;
+        result.token = `sess_${patUser.id}_${Date.now()}`;
       }
 
       return sendJson(res, statusCode, result);
@@ -544,6 +631,7 @@ const server = http.createServer(async (req, res) => {
       const departmentId = reqUrl.searchParams.get('departmentId') || reqUrl.searchParams.get('department_id');
       const includeCompleted = reqUrl.searchParams.get('includeCompleted') === 'true';
       const includeCancelled = reqUrl.searchParams.get('includeCancelled') === 'true';
+      const includeBooked = reqUrl.searchParams.get('includeBooked') === 'true';
 
       const entries = await getQueueEntries({
         hospitalId,
@@ -551,6 +639,7 @@ const server = http.createServer(async (req, res) => {
         departmentId,
         includeCompleted,
         includeCancelled,
+        includeBooked,
       });
       return sendJson(res, 200, { success: true, count: entries.length, entries });
     }

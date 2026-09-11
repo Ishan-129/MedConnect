@@ -49,6 +49,7 @@ export interface AuthContextType {
   openAuthModal: (tab?: 'hospital' | 'patient', mode?: 'login' | 'signup') => void;
   closeAuthModal: () => void;
   getAuthHeader: () => Record<string, string>;
+  setPatientSession: (patient: PatientUser, sessionToken?: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -208,6 +209,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const closeAuthModal = () => {
     setIsAuthModalOpen(false);
   };
+
+  const setPatientSession = useCallback((patient: PatientUser, sessionToken?: string) => {
+    setActivePatient(patient);
+    setActiveHospital(null);
+    if (sessionToken) {
+      setToken(sessionToken);
+      try {
+        localStorage.setItem('medconnect_auth_token', sessionToken);
+      } catch {}
+    }
+  }, []);
 
   const switchHospital = (hospitalId: string) => {
     const found = allHospitals.find((h) => h.hospital_id === hospitalId);
@@ -510,6 +522,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         openAuthModal,
         closeAuthModal,
         getAuthHeader,
+        setPatientSession,
       }}
     >
       {children}

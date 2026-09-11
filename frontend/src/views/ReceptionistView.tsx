@@ -24,6 +24,7 @@ import {
   PhoneCall,
   RefreshCw,
   QrCode,
+  Users,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QrCodeModal } from '../components/QrCodeModal';
@@ -64,7 +65,7 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('hi-IN');
+  const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('en-IN');
   const [transcript, setTranscript] = useState('');
   const [patientName, setPatientName] = useState<string>(
     () => activePatient?.name || ''
@@ -92,7 +93,7 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
     }
   }, [activePatient]);
   const [aiSpeechMessage, setAiSpeechMessage] = useState<string>(
-    'नमस्ते! मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।'
+    'Hello! Welcome to MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.'
   );
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContext>({});
@@ -427,7 +428,25 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
       if (res.ok) {
         const data = await res.json();
         const rawList = data.appointments || [];
-        formatted = rawList.map((a: any) => ({
+        const cleanUserPhone = (targetPhone || '').replace(/\D/g, '');
+        const patientOnlyList = rawList.filter((a: any) => {
+          const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+          if (targetPatientId && aPatId && aPatId === targetPatientId) return true;
+          const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+          if (cleanUserPhone && aPhone) {
+            if (cleanUserPhone === aPhone) return true;
+            if (cleanUserPhone.length >= 10 && aPhone.endsWith(cleanUserPhone.slice(-10))) return true;
+            if (aPhone.length >= 10 && cleanUserPhone.endsWith(aPhone.slice(-10))) return true;
+          }
+          if (activePatient.name && (a.patient_name || a.patients?.full_name)) {
+            const cleanActiveName = activePatient.name.trim().toLowerCase();
+            const cleanApptName = (a.patient_name || a.patients?.full_name || '').trim().toLowerCase();
+            if (cleanActiveName && cleanApptName && cleanActiveName === cleanApptName) return true;
+          }
+          return false;
+        });
+
+        formatted = patientOnlyList.map((a: any) => ({
           id: a.appointment_id || a.id,
           token_number: a.token_number,
           status: a.status || 'CONFIRMED',
@@ -479,11 +498,11 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
   // Map language to display label for speech synthesis and STT
   const getLanguageLabel = useCallback((code: string): string => {
     switch (code) {
-      case 'hi-IN': return 'Hindi';
       case 'en-IN': return 'English';
+      case 'hi-IN': return 'Hindi';
       case 'ta-IN': return 'Tamil';
       case 'te-IN': return 'Telugu';
-      default: return 'Hindi';
+      default: return 'English';
     }
   }, []);
 
@@ -1136,7 +1155,20 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
             <span className="text-xs font-mono text-ink-muted font-medium">Language:</span>
             <select
               value={selectedLanguage}
-              onChange={(e) => handleLanguageChange(e.target.value as any)}
+onChange={(e) => {
+                const nextLang = e.target.value as any;
+                handleLanguageChange(nextLang);
+                if (isSpeaking) handleStopSpeaking();
+                const greetings: Record<string, string> = {
+                  'en-IN': 'Hello! Welcome to Yashoda Hospital MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.',
+                  'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
+                  'ta-IN': 'வணக்கம்! மெட்கனெக்ட் ஏஐ வரவேற்பாளருக்கு வரவேற்கிறோம். மருத்துவர் சந்திப்பை பதிவு செய்ய பேசவும் அல்லது தட்டச்சு செய்யவும்.',
+                  'te-IN': 'నమస్కారం! మెడ్‌కనెక్ట్ ఏఐ రిసెప్షనిస్ట్‌కు స్వాగతం. డాక్టర్ అపాయింట్‌మెంట్ బుక్ చేయడానికి మాట్లాడండి లేదా టైప్ చేయండి.',
+                };
+                if (Object.values(greetings).includes(aiSpeechMessage) || !aiSpeechMessage) {
+                  setAiSpeechMessage(greetings[nextLang] || greetings['en-IN']);
+                }
+              }}
               className="pulse-select text-xs font-mono font-semibold py-1 px-2 text-accent border-rule bg-paper-2"
             >
               <option value="en-IN">English (en-IN)</option>
@@ -2144,14 +2176,29 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
                     </div>
                   )}
 
-                  <motion.button
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setShowQrModal(true)}
-                    className="text-xs font-mono text-accent font-bold hover:underline flex items-center space-x-1 pt-1"
-                  >
-                    <span>View & Download Check-In QR Pass</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </motion.button>
+                  <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setShowQrModal(true)}
+                      className="pulse-btn pulse-btn-secondary text-xs flex items-center justify-center space-x-1.5 py-2 flex-1"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>View & Download QR Pass</span>
+                    </motion.button>
+
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        const navEvt = new CustomEvent('navigate-view', { detail: { view: 'queue' } });
+                        window.dispatchEvent(navEvt);
+                      }}
+                      className="pulse-btn pulse-btn-primary text-xs flex items-center justify-center space-x-1.5 py-2 flex-1"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>Go to Live Queue & Scan QR →</span>
+                    </motion.button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

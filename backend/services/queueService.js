@@ -15,8 +15,9 @@ export function deriveQueueStatus(appt) {
   if (st === 'cancelled') return 'CANCELLED';
   if (st === 'no_show') return 'SKIPPED';
   if (st === 'in_consultation') return 'IN_CONSULTATION';
+  if (st === 'booked' && !appt.check_in_time) return 'BOOKED';
 
-  // For checked_in / booked: check if marked CALLED
+  // For checked_in: check if marked CALLED
   const isCalled = appt.queue_position === 0 ||
     (typeof appt.symptoms_summary === 'string' && appt.symptoms_summary.includes('[QUEUE_STATUS:CALLED]')) ||
     (typeof appt.correlation_id === 'string' && appt.correlation_id.includes('CALLED'));
@@ -47,6 +48,7 @@ export async function getQueueEntries(filters = {}) {
     departmentId,
     includeCompleted = false,
     includeCancelled = false,
+    includeBooked = false,
   } = typeof filters === 'string' ? { hospitalId: filters } : (filters || {});
 
   // Fetch from DB (db.getLiveQueueAppointments handles real Supabase queries)
@@ -101,6 +103,7 @@ export async function getQueueEntries(filters = {}) {
   const inConsultation = deduped.filter(e => e.status === 'IN_CONSULTATION');
   const called = deduped.filter(e => e.status === 'CALLED');
   const waiting = deduped.filter(e => e.status === 'WAITING');
+  const booked = deduped.filter(e => e.status === 'BOOKED');
   const completed = deduped.filter(e => e.status === 'COMPLETED');
   const cancelled = deduped.filter(e => e.status === 'CANCELLED' || e.status === 'SKIPPED');
 
@@ -129,12 +132,13 @@ export async function getQueueEntries(filters = {}) {
     e.estimated_wait_mins = 0;
   });
 
-  // Assemble final active queue roster
+  // Assemble final active queue roster (checked-in patients currently in OPD)
   const result = [];
   result.push(...inConsultation);
   result.push(...called);
   result.push(...waiting);
 
+  if (includeBooked) result.push(...booked);
   if (includeCompleted) result.push(...completed);
   if (includeCancelled) result.push(...cancelled);
 
@@ -367,19 +371,32 @@ export async function getQueueStatus(tokenIdOrApptId, options = {}) {
   const peopleAhead = Math.max(0, myPos - 1);
   const estWait = myEntry ? (myEntry.estimated_wait_mins ?? peopleAhead * 15) : peopleAhead * 15;
 
+  const isCheckedIn = Boolean(
+    appt.check_in_time ||
+    (appt.status || '').toLowerCase() === 'checked_in' ||
+    (appt.status || '').toLowerCase() === 'in_consultation' ||
+    myEntry
+  );
+
   return {
     success: true,
+    appointment_id: appt.id || appt.appointment_id,
     my_token: appt.token_number || appt.token,
     token: appt.token_number || appt.token,
-    status: myEntry ? myEntry.status : (appt.status || 'BOOKED').toUpperCase(),
+    status: myEntry ? myEntry.status : (isCheckedIn ? 'WAITING' : (appt.status || 'BOOKED').toUpperCase()),
+    checked_in: isCheckedIn,
     queue_position: myPos,
-    people_ahead: peopleAhead,
-    estimated_wait_minutes: estWait,
+    people_ahead: isCheckedIn ? peopleAhead : 0,
+    estimated_wait_minutes: isCheckedIn ? estWait : 0,
     current_token: activeConsultation ? activeConsultation.token : (calledPatient ? calledPatient.token : 'None'),
     doctor_name: appt.doctor_name || appt.doctors?.name || 'Assigned Doctor',
     department_name: appt.department_name || appt.departments?.name || 'OPD',
     hospital_name: appt.hospital_name || appt.hospitals?.name || 'Hospital',
+    appointment_date: appt.appointment_date || (appt.created_at ? appt.created_at.split('T')[0] : ''),
+    appointment_time: appt.appointment_time || '10:00 AM',
     is_emergency: isEmergencyAppointment(appt),
+    qr_code: appt.qr_code || appt.qr_data || null,
+    check_in_time: appt.check_in_time || null,
   };
 }
 

@@ -38,8 +38,8 @@ const WELCOME_MESSAGES = {
   Marathi: 'नमस्कार! मी मेडकनेक्ट एआय रिसेप्शनिस्ट आहे. मी तुमची अपॉइंटमेंट बुकिंग, रांगेची स्थिती, डॉक्टर उपलब्धता आणि आणीबाणीच्या कामात मदत करू शकतो.',
 };
 
-export function getWelcomeMessage(lang = 'Hinglish') {
-  return WELCOME_MESSAGES[lang] || WELCOME_MESSAGES['Hinglish'];
+export function getWelcomeMessage(lang = 'English') {
+  return WELCOME_MESSAGES[lang] || WELCOME_MESSAGES['English'];
 }
 
 export function fallbackTranslate(text, targetLang) {
@@ -483,8 +483,8 @@ async function processReceptionistTurnRaw(input) {
           dept.id === matchedDoc?.department_id ||
           transcriptText.toLowerCase().includes(dept.name.toLowerCase())
         );
-        const resolvedDoctorName = matchedDoc ? matchedDoc.name : (actionPayload?.token?.doctor || 'Dr. Rajesh Sharma');
-        const resolvedDepartmentName = matchedDept ? matchedDept.name : (matchedDoc?.department_name || actionPayload?.department || 'Orthopedics');
+        const resolvedDoctorName = matchedDoc ? matchedDoc.name : (actionPayload?.token?.doctor || (doctors[0]?.name || 'Duty Specialist'));
+        const resolvedDepartmentName = matchedDept ? matchedDept.name : (matchedDoc?.department_name || actionPayload?.department || (departments[0]?.name || 'General OPD'));
 
         // Check if user specified a specialty/department in transcript (e.g., cardiologist, cardiology, orthopedics)
         const isCardio = /\b(cardio|cardiologist|cardiology|heart)\b/i.test(transcriptText);

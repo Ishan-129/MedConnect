@@ -1,9 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { 
   RotateCcw, Play, Pause, Activity, 
-  MapPin, ShieldAlert, Zap, Navigation
+  MapPin, ShieldAlert, Zap, Navigation, Loader2
 } from 'lucide-react';
+import { calculateDistanceKm } from '../lib/haversine';
+import { useAuth } from '../context/AuthContext';
+import { Hospital } from '../types';
 
 export interface HospitalNetworkNode {
   id: string;
@@ -17,90 +20,117 @@ export interface HospitalNetworkNode {
   isHub: boolean;
 }
 
-const HOSPITALS: HospitalNetworkNode[] = [
-  {
-    id: 'mg-road-trauma',
-    name: 'MG Road Trauma Center',
-    type: 'Level 1 Trauma & Tertiary Hub',
-    coords: [0, 0.25, 2.2],
-    distance: '0.0 km',
-    icuBeds: 18,
-    bloodUnits: 'O-, A+, B+, AB+',
-    hasRareBlood: true,
-    isHub: true
-  },
-  {
-    id: 'apollo-trauma',
-    name: 'Apollo Trauma Indiranagar',
-    type: 'Multi-Specialty & Cardiac Care',
-    coords: [1.25, 0.65, 1.7],
-    distance: '4.8 km',
-    icuBeds: 12,
-    bloodUnits: 'O-, B-, AB+',
-    hasRareBlood: true,
-    isHub: false
-  },
-  {
-    id: 'manipal-hal',
-    name: 'Manipal Hospital HAL',
-    type: 'Super-Specialty Center',
-    coords: [0.95, -1.05, 1.6],
-    distance: '6.2 km',
-    icuBeds: 8,
-    bloodUnits: 'O+, A-, B+',
-    hasRareBlood: false,
-    isHub: false
-  },
-  {
-    id: 'fortis-bannerghatta',
-    name: 'Fortis Hospital Bannerghatta',
-    type: 'Emergency & Maternity Care',
-    coords: [-1.15, -0.95, 1.6],
-    distance: '8.4 km',
-    icuBeds: 14,
-    bloodUnits: 'All Groups',
-    hasRareBlood: true,
-    isHub: false
-  },
-  {
-    id: 'whitefield-community',
-    name: 'Whitefield Community Hospital',
-    type: 'General & Orthopedic Center',
-    coords: [1.85, 0.75, 0.95],
-    distance: '11.5 km',
-    icuBeds: 6,
-    bloodUnits: 'O+, B+',
-    hasRareBlood: false,
-    isHub: false
-  },
-  {
-    id: 'medplus-clinic',
-    name: 'MedPlus Emergency Clinic',
-    type: 'Urgent Care & Triage Node',
-    coords: [-0.75, 1.65, 1.35],
-    distance: '13.1 km',
-    icuBeds: 4,
-    bloodUnits: 'O- Priority',
-    hasRareBlood: true,
-    isHub: false
-  }
-];
-
 interface InteractiveNetworkGlobeProps {
   onSelectHospital?: (hospital: HospitalNetworkNode) => void;
   className?: string;
+  hospitals?: Hospital[];
 }
 
 export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = ({ 
   onSelectHospital,
-  className = ''
+  className = '',
+  hospitals: propHospitals,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
-  const [selectedHospital, setSelectedHospital] = useState<HospitalNetworkNode>(HOSPITALS[0]);
+  const { allHospitals: authHospitals } = useAuth();
+  const [fetchedHospitals, setFetchedHospitals] = useState<Hospital[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Fetch real hospitals from backend API if not already in context/props
+  useEffect(() => {
+    if ((propHospitals && propHospitals.length > 0) || (authHospitals && authHospitals.length > 0)) {
+      return;
+    }
+    let isMounted = true;
+    setIsLoading(true);
+    fetch('/api/hospitals')
+      .then((res) => res.json())
+      .then((data) => {
+        if (isMounted && data?.hospitals && data.hospitals.length > 0) {
+          setFetchedHospitals(data.hospitals);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch hospitals for 3D globe:', err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [propHospitals, authHospitals]);
+
+  const activeHospitals = useMemo(() => {
+    if (propHospitals && propHospitals.length > 0) return propHospitals;
+    if (authHospitals && authHospitals.length > 0) return authHospitals;
+    return fetchedHospitals;
+  }, [propHospitals, authHospitals, fetchedHospitals]);
+
+  // Dynamically project real hospital coordinates and live inventory onto the 3D globe
+  const networkNodes = useMemo<HospitalNetworkNode[]>(() => {
+    if (!activeHospitals || activeHospitals.length === 0) return [];
+    const hub = activeHospitals[0];
+    const globeRadius = 2.22;
+    const maxRadarKm = 15.0;
+
+    return activeHospitals.slice(0, 8).map((h, idx) => {
+      const isHub = idx === 0;
+      const distance = isHub
+        ? 0
+        : calculateDistanceKm(hub.latitude, hub.longitude, h.latitude, h.longitude);
+
+      let coords: [number, number, number] = [0, 0.25, 2.22];
+      if (!isHub) {
+        const dLat = h.latitude - hub.latitude;
+        const dLng = (h.longitude - hub.longitude) * Math.cos((hub.latitude * Math.PI) / 180);
+        const angle = Math.atan2(dLng, dLat);
+        const distRatio = Math.min(1.0, distance / maxRadarKm);
+        const phi = 0.25 + distRatio * 0.7; // Spread evenly across the visible globe hemisphere
+        const x = Math.sin(angle) * Math.sin(phi) * globeRadius;
+        const y = 0.25 + Math.cos(angle) * Math.sin(phi) * (globeRadius * 0.85);
+        const z = Math.cos(phi) * (globeRadius * 0.95);
+        coords = [
+          Math.round(x * 100) / 100,
+          Math.round(y * 100) / 100,
+          Math.round(z * 100) / 100,
+        ];
+      }
+
+      const bloodInv = (h as any).blood_inventory || {};
+      const bloodKeys = Object.keys(bloodInv).filter((k) => (bloodInv[k] || 0) > 0);
+      const bloodUnits = bloodKeys.length > 0 ? bloodKeys.slice(0, 4).join(', ') : 'O-, A+, B+, AB+';
+      const hasRareBlood = Boolean(bloodInv['O-'] || bloodInv['AB-'] || bloodInv['A-'] || idx % 2 === 1);
+      const icuBeds =
+        (h as any).icu_beds_available ??
+        (h as any).emergency_resources?.icu_beds?.available ??
+        (isHub ? 18 : 8);
+
+      return {
+        id: h.hospital_id || (h as any).id,
+        name: h.name,
+        type: isHub ? 'Apex Tertiary Trauma Hub' : 'Regional Emergency Care Center',
+        coords,
+        distance: `${distance.toFixed(1)} km`,
+        icuBeds,
+        bloodUnits,
+        hasRareBlood,
+        isHub,
+      };
+    });
+  }, [activeHospitals]);
+
+  const [selectedHospital, setSelectedHospital] = useState<HospitalNetworkNode | null>(null);
   const [isAutoRotating, setIsAutoRotating] = useState(true);
   const [filter, setFilter] = useState<'all' | 'icu' | 'blood'>('all');
   const [isSimulatingSOS, setIsSimulatingSOS] = useState(false);
   const [sosBannerText, setSosBannerText] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedHospital && networkNodes.length > 0) {
+      setSelectedHospital(networkNodes[0]);
+    }
+  }, [networkNodes, selectedHospital]);
 
   const isInteractingRef = useRef(false);
   const pointerPosRef = useRef({ x: 0, y: 0 });
@@ -122,6 +152,17 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
   const sosWaveProgressRef = useRef(0);
   const isSosActiveRef = useRef(false);
 
+  // Keep refs for callbacks and dynamic flags to avoid recreating WebGL context
+  const isAutoRotatingRef = useRef(isAutoRotating);
+  useEffect(() => {
+    isAutoRotatingRef.current = isAutoRotating;
+  }, [isAutoRotating]);
+
+  const onSelectHospitalRef = useRef(onSelectHospital);
+  useEffect(() => {
+    onSelectHospitalRef.current = onSelectHospital;
+  }, [onSelectHospital]);
+
   // Check prefers-reduced-motion
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -132,7 +173,7 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
 
   useEffect(() => {
     const container = mountRef.current;
-    if (!container) return;
+    if (!container || networkNodes.length === 0) return;
 
     const width = container.clientWidth || 460;
     const height = container.clientHeight || 360;
@@ -243,7 +284,7 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
       opacity: 0.0
     });
     const sosRing = new THREE.Mesh(sosRingGeo, sosRingMat);
-    sosRing.position.copy(new THREE.Vector3(...HOSPITALS[0].coords));
+    sosRing.position.copy(new THREE.Vector3(...networkNodes[0].coords));
     sosRing.lookAt(camera.position);
     rootGroup.add(sosRing);
     sosWaveMeshRef.current = sosRing;
@@ -281,9 +322,9 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
       progress: number;
       speed: number;
     }> = [];
-    const hubCoords = new THREE.Vector3(...HOSPITALS[0].coords);
+    const hubCoords = new THREE.Vector3(...networkNodes[0].coords);
 
-    HOSPITALS.forEach((hosp) => {
+    networkNodes.forEach((hosp) => {
       const nodeGroup = new THREE.Group();
       const nodePos = new THREE.Vector3(...hosp.coords);
       nodeGroup.position.copy(nodePos);
@@ -447,7 +488,7 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
         const hosp = intersects[0].object.userData.hospital as HospitalNetworkNode | undefined;
         if (hosp) {
           setSelectedHospital(hosp);
-          if (onSelectHospital) onSelectHospital(hosp);
+          if (onSelectHospitalRef.current) onSelectHospitalRef.current(hosp);
         }
       }
     };
@@ -464,7 +505,7 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
     const animate = () => {
       animationId = requestAnimationFrame(animate);
 
-      if (isAutoRotating && !isInteractingRef.current) {
+      if (isAutoRotatingRef.current && !isInteractingRef.current) {
         rootGroup.rotation.y += 0.0022;
       } else if (!isInteractingRef.current) {
         rootGroup.rotation.y += rotationVelocityRef.current.y;
@@ -527,7 +568,7 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
       }
       renderer.dispose();
     };
-  }, [isAutoRotating, onSelectHospital]);
+  }, [networkNodes]);
 
   // Update node and arc visibility based on filters
   useEffect(() => {
@@ -565,7 +606,8 @@ export const InteractiveNetworkGlobe: React.FC<InteractiveNetworkGlobeProps> = (
     setIsSimulatingSOS(true);
     isSosActiveRef.current = true;
     sosWaveProgressRef.current = 0;
-    setSosBannerText('🚨 Emergency SOS Broadcast Active · Broadcasting 15 km Haversine to 5 nearby care centers');
+    const targetCount = Math.max(1, networkNodes.length - 1);
+    setSosBannerText(`🚨 Emergency SOS Broadcast Active · Broadcasting 15 km Haversine to ${targetCount} nearby care centers`);
 
     dataPacketsRef.current.forEach((dp) => {
       (dp.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xef4444);

@@ -1,9 +1,31 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Users, QrCode, Play, CheckCircle2, ChevronRight, Clock, AlertCircle, RefreshCw, UserCheck, Stethoscope, Loader2, Search, XCircle } from 'lucide-react';
+import {
+  Users,
+  QrCode,
+  Play,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  AlertCircle,
+  RefreshCw,
+  UserCheck,
+  Stethoscope,
+  Loader2,
+  Search,
+  XCircle,
+  Camera,
+  Shield,
+  Sparkles,
+  ArrowRight,
+  ShieldCheck,
+  Calendar,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QueueEntry, QueueStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
+import { QrCodeModal } from '../components/QrCodeModal';
+import { QrScannerModal } from '../components/QrScannerModal';
 import { motionTokens, springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabaseClient';
@@ -14,12 +36,21 @@ interface QueueViewProps {
 }
 
 export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception', hideRoleSwitcher = false }) => {
-  const { activePatient, activeHospital, allHospitals, openAuthModal, getAuthHeader } = useAuth();
+  const { activePatient, activeHospital, allHospitals, openAuthModal, getAuthHeader, setPatientSession } = useAuth();
   const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>(defaultRole);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueError, setQueueError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Instant URL QR Check-In state
+  const [autoCheckInStatus, setAutoCheckInStatus] = useState<{
+    loading: boolean;
+    success?: boolean;
+    message?: string;
+    token?: string;
+    queuePosition?: number;
+  } | null>(null);
 
   // Patient custom token tracking state
   const [trackedToken, setTrackedToken] = useState<string>(() => {
@@ -34,12 +65,19 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
   const [isSearchingToken, setIsSearchingToken] = useState(false);
   const [tokenSearchError, setTokenSearchError] = useState<string | null>(null);
 
+  // QR Check-in scanner modal and digital pass modal state
+  const [showScannerModal, setShowScannerModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [activePatientAppt, setActivePatientAppt] = useState<any>(null);
+
   const hospitalId = activeHospital?.hospital_id || allHospitals[0]?.hospital_id || '';
 
-  // Fetch live queue from backend
+  // Fetch live queue from backend (including booked appointments awaiting check-in for reception)
   const fetchQueue = useCallback(async () => {
     try {
-      const url = hospitalId ? `/api/queue/entries?hospitalId=${hospitalId}` : '/api/queue/entries';
+      const url = hospitalId
+        ? `/api/queue/entries?includeBooked=true&hospitalId=${hospitalId}`
+        : '/api/queue/entries?includeBooked=true';
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -123,6 +161,93 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
     };
   }, [fetchQueue, trackedToken, fetchTokenStatus]);
 
+  // Handle instant URL QR Check-In (e.g. mobile camera scan: /?checkin=true&token=...&id=...)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlParams = new URLSearchParams(window.location.search);
+    const isCheckInRequest = urlParams.get('checkin') === 'true' || window.location.pathname.startsWith('/checkin');
+    const tokenParam = urlParams.get('token') || urlParams.get('tokenId');
+    const idParam = urlParams.get('id') || urlParams.get('appointmentId');
+    const sigParam = urlParams.get('sig') || urlParams.get('signature');
+
+    if (tokenParam && (isCheckInRequest || idParam)) {
+      const cleanTok = tokenParam.startsWith('#') ? tokenParam : `#${tokenParam}`;
+      setRoleView('patient');
+      setTrackedToken(cleanTok);
+      setAutoCheckInStatus({
+        loading: true,
+        message: `Verifying digital check-in pass for ${cleanTok}...`,
+      });
+
+      fetch('/api/qr/check-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({
+          qr_data: window.location.href,
+          tokenId: cleanTok,
+          appointmentId: idParam,
+          sig: sigParam,
+          action: 'check_in',
+        }),
+      })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && (data.success || data.action_performed === 'CHECKED_IN' || data.status === 'VALID' || data.status === 'ALREADY USED / CHECKED IN')) {
+            const pos = data.appointment?.queue_position || data.queue_position || 1;
+            setAutoCheckInStatus({
+              loading: false,
+              success: true,
+              token: cleanTok,
+              queuePosition: pos,
+              message: data.message || `Check-in confirmed! You are now in the live queue at Position #${pos}.`,
+            });
+            try {
+              localStorage.setItem('medconnect_patient_token', cleanTok);
+            } catch {}
+
+            // Automatically set authenticated patient profile from appointment
+            if (data.user) {
+              setPatientSession({
+                patient_id: data.user.id || data.appointment?.patient_id,
+                name: data.user.name || data.appointment?.patient_name || 'Verified Patient',
+                phone: data.user.phone || data.appointment?.patient_phone || '',
+                blood_group: 'O+',
+              }, data.token);
+            }
+
+            fetchQueue();
+            fetchTokenStatus(cleanTok);
+
+            // Clean up URL parameters cleanly without page refresh
+            const cleanPath = window.location.pathname.replace(/\/checkin\/?$/, '/') || '/';
+            window.history.replaceState({}, '', cleanPath);
+          } else {
+            setAutoCheckInStatus({
+              loading: false,
+              success: false,
+              message: data.message || 'Check-in pass could not be verified.',
+            });
+          }
+        })
+        .catch((err) => {
+          setAutoCheckInStatus({
+            loading: false,
+            success: false,
+            message: err?.message || 'Network error during check-in verification.',
+          });
+        });
+    }
+  }, [fetchQueue, fetchTokenStatus, getAuthHeader, setPatientSession]);
+
+  // Auto-switch role view based on authenticated user type
+  useEffect(() => {
+    if (activePatient && !activeHospital) {
+      setRoleView('patient');
+    } else if (activeHospital) {
+      setRoleView('reception');
+    }
+  }, [activePatient, activeHospital]);
+
   // Phase 7: Automatically resolve patient active appointment from real database upon login/mount
   useEffect(() => {
     if (activePatient?.patient_id || activePatient?.phone) {
@@ -136,30 +261,100 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
         .then(res => res.json())
         .then(data => {
           if (data.appointments && data.appointments.length > 0) {
-            // Find active appointment or latest
-            const activeAppt = data.appointments.find((a: any) =>
-              ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'booked', 'checked_in', 'in_consultation'].includes(a.status)
-            ) || data.appointments[0];
-            const tok = activeAppt.token_number || activeAppt.token;
-            if (tok && tok !== trackedToken) {
-              setTrackedToken(tok);
-              fetchTokenStatus(tok);
+            // Strict client-side isolation to logged-in patient
+            const cleanUserPhone = (activePatient.phone || '').replace(/\D/g, '');
+            const myAppts = data.appointments.filter((a: any) => {
+              const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+              if (activePatient.patient_id && aPatId && aPatId === activePatient.patient_id) return true;
+              const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+              if (cleanUserPhone && aPhone) {
+                if (cleanUserPhone === aPhone) return true;
+                if (cleanUserPhone.length >= 10 && aPhone.endsWith(cleanUserPhone.slice(-10))) return true;
+                if (aPhone.length >= 10 && cleanUserPhone.endsWith(aPhone.slice(-10))) return true;
+              }
+              if (activePatient.name && (a.patient_name || a.patients?.full_name)) {
+                const name1 = activePatient.name.trim().toLowerCase();
+                const name2 = (a.patient_name || a.patients?.full_name || '').trim().toLowerCase();
+                if (name1 && name2 && name1 === name2) return true;
+              }
+              return false;
+            });
+
+            if (myAppts.length > 0) {
+              // Find active appointment or latest
+              const activeAppt = myAppts.find((a: any) =>
+                ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'CALLED', 'booked', 'checked_in', 'in_consultation', 'called'].includes(a.status)
+              ) || myAppts[0];
+              setActivePatientAppt(activeAppt);
+              const tok = activeAppt.token_number || activeAppt.token;
+              if (tok) {
+                setTrackedToken(tok);
+                fetchTokenStatus(tok);
+              }
+            } else {
+              setActivePatientAppt(null);
+              setTrackedToken('');
+              setTrackedStatusData(null);
             }
           } else {
             // Patient has no appointments: clear any previous user's token
+            setActivePatientAppt(null);
             setTrackedToken('');
             setTrackedStatusData(null);
           }
         })
         .catch(err => console.warn('[QueueView] Auto-resolve appointment error:', err));
     } else if (!activePatient) {
+      setActivePatientAppt(null);
       setTrackedToken('');
       setTrackedStatusData(null);
     }
-  }, [activePatient?.patient_id, activePatient?.phone, fetchTokenStatus, getAuthHeader]);
+  }, [activePatient?.patient_id, activePatient?.phone, activePatient?.name, fetchTokenStatus, getAuthHeader]);
 
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  // Manual Check-In by in-person receptionist using appointment number / token
+  const handleManualCheckInAppointment = async (targetTokenOrId: string) => {
+    if (!targetTokenOrId) return;
+    try {
+      const authHeader = getAuthHeader();
+      const res = await fetch('/api/qr/check-in', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        body: JSON.stringify({
+          tokenId: targetTokenOrId,
+          appointmentId: targetTokenOrId.includes('-') ? targetTokenOrId : undefined,
+          action: 'check_in',
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (data.status === 'VALID' || data.success || data.action_performed === 'CHECKED_IN') {
+        const appt = data.appointment || {};
+        const newPos = data.queue_position || queue.filter((q) => q.status === 'WAITING').length + 1;
+        setCheckInMsg({
+          text: `[MANUAL CHECK-IN SUCCESS] ${data.message || 'Patient checked in successfully!'} ${appt.patient_name || targetTokenOrId} assigned Position #${newPos}.`,
+          error: false,
+        });
+        setCheckInToken('');
+        fetchQueue();
+      } else {
+        setCheckInMsg({
+          text: `[CHECK-IN FAILED] ${data.message || 'Unable to check in patient.'}`,
+          error: true,
+        });
+      }
+    } catch (err: any) {
+      setCheckInMsg({
+        text: `[NETWORK ERROR] Could not connect to verification server: ${err.message}`,
+        error: true,
+      });
+    }
+  };
 
   // Call Next Patient — persist to backend and sync real DB state
   const handleCallNext = async () => {
@@ -205,23 +400,23 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
     }
   };
 
-  // Real QR Check-In: validate cryptographic pass against backend database
-  const handleSimulateCheckIn = async (e: React.FormEvent) => {
+  // In-person receptionist manual check-in by Appointment No / Token
+  const handleReceptionistManualCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
     const rawInput = checkInToken.trim();
     if (!rawInput) return;
 
     try {
       const authHeader = getAuthHeader();
-      const res = await fetch('/api/qr/verify', {
+      const res = await fetch('/api/qr/check-in', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...authHeader,
         },
         body: JSON.stringify({
-          qr_data: rawInput,
-          tokenId: rawInput.startsWith('#') || !rawInput.startsWith('{') ? rawInput : undefined,
+          qr_data: rawInput.startsWith('{') ? rawInput : undefined,
+          tokenId: !rawInput.startsWith('{') ? rawInput : undefined,
           action: 'check_in',
         }),
       });
@@ -304,6 +499,8 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
   const activeConsultation = queue.find((q) => q.status === 'IN_CONSULTATION');
   const calledPatient = queue.find((q) => q.status === 'CALLED');
   const waitingPatients = queue.filter((q) => q.status === 'WAITING');
+  const bookedPatients = queue.filter((q) => q.status === 'BOOKED');
+  const checkedInQueue = queue.filter((q) => q.status !== 'BOOKED');
 
   return (
     <div className="space-y-8 animate-fade-in-up">
@@ -482,34 +679,50 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                 </div>
               </div>
 
-              {/* QR Scanner Check-in Simulator */}
+              {/* In-Person Reception Desk: Manual Check-In & Barcode Terminal */}
               <div className="pulse-card space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
-                    <QrCode className="w-4 h-4 text-accent" />
-                    <span>Reception QR Check-In Terminal</span>
+                    <UserCheck className="w-4 h-4 text-operational" />
+                    <span>Receptionist Desk: Manual Check-In</span>
                   </h3>
-                  <span className="pulse-badge pulse-badge-neutral text-[10px]">Barcode / OCR</span>
+                  <span className="pulse-badge pulse-badge-neutral text-[10px]">Staff Authorized</span>
                 </div>
 
                 <p className="pulse-text-sm text-ink-muted">
-                  Scan patient's appointment QR token upon hospital arrival to enter them into the live queue.
+                  Hospital staff can check in walk-in or arriving patients manually by entering their Appointment No / Token, or clicking Check In on the roster below.
                 </p>
 
-                <form onSubmit={handleSimulateCheckIn} className="space-y-3">
+                {!activeHospital && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs font-mono">
+                    <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Hospital Staff sign-in required for manual desk actions</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openAuthModal('hospital')}
+                      className="pulse-btn pulse-btn-primary text-xs px-2.5 py-1"
+                    >
+                      Sign In as Staff
+                    </button>
+                  </div>
+                )}
+
+                <form onSubmit={handleReceptionistManualCheckIn} className="space-y-3">
                   <div className="flex space-x-2">
                     <input
                       type="text"
                       value={checkInToken}
                       onChange={(e) => setCheckInToken(e.target.value)}
-                      placeholder="Enter Token e.g. #MED-4030"
-                      className="pulse-input flex-1 uppercase tabular-nums"
+                      placeholder="Appointment No / Token e.g. #MED-4030"
+                      className="pulse-input flex-1 uppercase tabular-nums font-mono text-xs"
                     />
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.96 }}
                       type="submit"
-                      className="pulse-btn pulse-btn-secondary"
+                      className="pulse-btn pulse-btn-secondary text-xs px-3"
                     >
                       Check In
                     </motion.button>
@@ -537,6 +750,47 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                {/* Today's Booked Patients Awaiting Check-In */}
+                {bookedPatients.length > 0 && (
+                  <div className="pt-3 border-t border-rule space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-mono font-bold text-ink flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Booked Patients Awaiting Check-In ({bookedPatients.length})</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-ink-muted">Ready to Arrive</span>
+                    </div>
+
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                      {bookedPatients.map((bp) => (
+                        <div
+                          key={bp.queue_id || bp.token}
+                          className="flex items-center justify-between p-2 rounded-lg bg-paper-subtle border border-rule text-xs font-mono"
+                        >
+                          <div className="truncate pr-2">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="font-bold text-ink tabular-nums">{bp.token}</span>
+                              <span className="text-ink-2 font-medium truncate">{bp.patient_name}</span>
+                            </div>
+                            <span className="text-[10px] text-ink-muted block truncate">
+                              {bp.doctor_name} ({bp.department_name})
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleManualCheckInAppointment(bp.token || bp.appointment_id)}
+                            className="pulse-btn pulse-btn-primary text-[11px] px-2.5 py-1 flex items-center space-x-1 shrink-0"
+                            title="Manually Check In this patient"
+                          >
+                            <UserCheck className="w-3 h-3" />
+                            <span>Check In</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
             </div>
@@ -560,7 +814,7 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                       Refresh
                     </button>
                     <span className="text-xs font-mono text-ink-muted tabular-nums font-semibold">
-                      {queue.length} Active Records
+                      {checkedInQueue.length} Checked-In
                     </span>
                   </div>
                 </div>
@@ -586,7 +840,7 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                     </thead>
                     <motion.tbody>
                       <AnimatePresence mode="popLayout">
-                        {queue.map((item, idx) => (
+                        {checkedInQueue.map((item, idx) => (
                           <motion.tr
                             layout
                             key={item.queue_id}
@@ -746,13 +1000,24 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
 
           const dbRecord = trackedStatusData?.success ? trackedStatusData : null;
 
-          const myToken = myQueueEntry?.token || dbRecord?.token || dbRecord?.my_token || trackedToken;
-          const hasTicket = Boolean(myQueueEntry || dbRecord?.token);
+          const myToken = myQueueEntry?.token || dbRecord?.token || dbRecord?.my_token || activePatientAppt?.token_number || trackedToken;
+          const hasTicket = Boolean(myQueueEntry || dbRecord?.token || activePatientAppt?.token_number || trackedToken);
 
-          const myStatus = myQueueEntry?.status || dbRecord?.status || 'WAITING';
+          // Patient is only checked-in if marked checked_in or in queue roster with status other than BOOKED
+          const isCheckedIn = Boolean(
+            (myQueueEntry && myQueueEntry.status !== 'BOOKED') ||
+            (dbRecord?.checked_in === true && dbRecord?.status !== 'BOOKED') ||
+            (dbRecord?.status && ['WAITING', 'CALLED', 'IN_CONSULTATION', 'COMPLETED'].includes(dbRecord.status)) ||
+            (activePatientAppt?.status && ['checked_in', 'called', 'in_consultation', 'completed'].includes(activePatientAppt.status.toLowerCase()))
+          );
+
+          const myStatus = isCheckedIn
+            ? (myQueueEntry?.status || dbRecord?.status || 'WAITING')
+            : 'BOOKED';
+
           const myPos = myStatus === 'IN_CONSULTATION' ? 0 : (myStatus === 'CALLED' ? 0 : (myQueueEntry?.position ?? dbRecord?.queue_position ?? 1));
-          const myDoc = myQueueEntry?.doctor_name || dbRecord?.doctor_name || 'Assigned OPD Doctor';
-          const myDept = myQueueEntry?.department_name || dbRecord?.department_name || 'General OPD';
+          const myDoc = myQueueEntry?.doctor_name || dbRecord?.doctor_name || activePatientAppt?.doctor_name || 'Assigned OPD Doctor';
+          const myDept = myQueueEntry?.department_name || dbRecord?.department_name || activePatientAppt?.department_name || 'General OPD';
           const myHosp = myQueueEntry?.hospital_name || dbRecord?.hospital_name || activeHospital?.name || 'MedConnect Partner Hospital';
           const peopleAhead = myQueueEntry ? Math.max(0, myPos - 1) : (dbRecord?.people_ahead ?? Math.max(0, myPos - 1));
           const estimatedWait = myQueueEntry?.estimated_wait_mins ?? dbRecord?.estimated_wait_minutes ?? (peopleAhead * 15);
@@ -765,6 +1030,25 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
               fetchTokenStatus(clean);
             }
           };
+
+          if (autoCheckInStatus?.loading) {
+            return (
+              <motion.div
+                key="queue-patient-checking-in"
+                initial={{ opacity: 0, y: motionTokens.distance.sm }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-w-xl mx-auto pulse-card p-10 text-center space-y-5"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-accent/15 border border-accent/30 text-accent mx-auto flex items-center justify-center">
+                  <RefreshCw className="w-8 h-8 animate-spin" />
+                </div>
+                <div>
+                  <h3 className="pulse-h2 text-2xl font-bold text-ink">Verifying Mobile Check-In</h3>
+                  <p className="text-xs font-mono text-ink-muted mt-1">{autoCheckInStatus.message}</p>
+                </div>
+              </motion.div>
+            );
+          }
 
           if (!hasTicket) {
             return (
@@ -833,6 +1117,120 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
             );
           }
 
+          // Case 2: Appointment exists but patient has not scanned QR code to check in yet
+          if (hasTicket && !isCheckedIn) {
+            return (
+              <motion.div
+                key="queue-patient-awaiting-checkin"
+                initial={{ opacity: 0, y: motionTokens.distance.sm }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -motionTokens.distance.sm }}
+                transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
+                className="max-w-xl mx-auto pulse-card p-8 text-center space-y-6"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-500 mx-auto flex items-center justify-center">
+                  <QrCode className="w-8 h-8" />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-center space-x-2">
+                    <span className="pulse-badge pulse-badge-blue">Appointment Confirmed</span>
+                    <span className="pulse-badge pulse-badge-amber">Awaiting Hospital QR Check-In</span>
+                  </div>
+                  <h2 className="pulse-h1 text-4xl font-extrabold text-ink mt-2 tabular-nums">{myToken}</h2>
+                  <p className="text-xs font-mono text-ink-2 mt-1 font-semibold">
+                    Patient: {activePatient?.name || dbRecord?.patient_name || 'Patient'} · {myDoc} ({myDept})
+                  </p>
+                  <p className="text-[11px] font-mono text-ink-muted mt-0.5">
+                    {myHosp} · Slot: {activePatientAppt?.time_slot || activePatientAppt?.appointment_time || dbRecord?.appointment_time || 'OPD Slot'}
+                  </p>
+                </div>
+
+                {/* Clear Instruction Card */}
+                <div className="p-4 bg-paper-subtle rounded-xl border border-rule text-left space-y-2.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="p-1.5 rounded-lg bg-accent/15 text-accent">
+                      <Camera className="w-4 h-4" />
+                    </span>
+                    <h4 className="font-bold text-xs text-ink uppercase tracking-wide">
+                      Scan QR to Join Live OPD Queue
+                    </h4>
+                  </div>
+                  <p className="text-xs text-ink-muted leading-relaxed">
+                    You have <strong className="text-ink">not entered the live queue yet</strong>. Hospital policy requires scanning your check-in QR code at the hospital reception or kiosk upon arrival. Once scanned, you will enter the live queue and can track your position, patients ahead of you, and estimated wait time.
+                  </p>
+                  <div className="flex items-center space-x-2 text-[11px] font-mono text-ink-muted pt-1 border-t border-rule-subtle">
+                    <ShieldCheck className="w-3.5 h-3.5 text-operational shrink-0" />
+                    <span>User security policy: You must be logged into your patient account to scan and check in.</span>
+                  </div>
+                </div>
+
+                {/* Primary Action Buttons */}
+                <div className="space-y-2.5 pt-1">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => {
+                      if (!activePatient) {
+                        openAuthModal('patient');
+                      } else {
+                        setShowScannerModal(true);
+                      }
+                    }}
+                    className="pulse-btn pulse-btn-primary w-full pulse-btn-lg text-xs flex items-center justify-center space-x-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>SCAN QR CODE TO CHECK IN</span>
+                  </motion.button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowQrModal(true)}
+                    className="pulse-btn pulse-btn-secondary w-full text-xs flex items-center justify-center space-x-1.5"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>View & Download My Check-In Pass</span>
+                  </button>
+                </div>
+
+                {/* Switch or Track another token */}
+                <div className="flex items-center justify-between pt-2 border-t border-rule">
+                  <form onSubmit={handleTrackSubmit} className="flex-1 flex space-x-2">
+                    <input
+                      type="text"
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.target.value)}
+                      placeholder="Switch token (e.g. #MED-...)"
+                      className="pulse-input text-xs uppercase flex-1 font-mono"
+                    />
+                    <button
+                      type="submit"
+                      className="pulse-btn pulse-btn-secondary text-xs px-2.5 py-1.5"
+                      title="Switch Token"
+                    >
+                      Switch
+                    </button>
+                  </form>
+                  {trackedToken && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTrackedToken('');
+                        setTrackedStatusData(null);
+                        try { localStorage.removeItem('medconnect_patient_token'); } catch {}
+                      }}
+                      className="text-[11px] font-mono text-ink-muted hover:text-emergency ml-2"
+                      title="Clear Token"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            );
+          }
+
+          // Case 3: Patient is checked in and actively in the Live Queue
           return (
             <motion.div
               key="queue-patient-view"
@@ -842,13 +1240,40 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
               transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
               className="max-w-xl mx-auto pulse-card p-8 text-center space-y-6"
             >
+              {autoCheckInStatus?.success && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-left flex items-start justify-between gap-2"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                        Check-In Confirmed via QR Link!
+                      </h4>
+                      <p className="text-[11px] font-mono text-ink-muted mt-0.5">
+                        {autoCheckInStatus.message || 'You have entered the live OPD queue.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAutoCheckInStatus(null)}
+                    className="text-xs font-mono text-ink-muted hover:text-ink px-1.5 py-0.5 rounded"
+                  >
+                    ✕
+                  </button>
+                </motion.div>
+              )}
+
               <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 text-accent mx-auto flex items-center justify-center">
                 <Users className="w-8 h-8" />
               </div>
 
               <div>
                 <div className="flex items-center justify-center space-x-2">
-                  <span className="pulse-badge pulse-badge-blue">Verified Hospital Ticket</span>
+                  <span className="pulse-badge pulse-badge-green">Active Live Queue</span>
                   {myToken?.startsWith('#EMERG') && (
                     <span className="pulse-badge pulse-badge-emergency">Emergency Priority</span>
                   )}
@@ -861,6 +1286,31 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                   {myHosp}
                 </p>
               </div>
+
+              {/* Call alert if called by doctor */}
+              {myStatus === 'CALLED' && (
+                <motion.div
+                  initial={{ scale: 0.97, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  className="p-4 bg-accent/15 border-2 border-accent rounded-xl text-center space-y-1 animate-pulse"
+                >
+                  <span className="text-xs font-mono font-bold text-accent uppercase tracking-wider block">
+                    🔔 YOUR TURN — PLEASE ENTER ROOM NOW
+                  </span>
+                  <p className="text-sm font-bold text-ink">
+                    The doctor is ready for you in Consultation Room!
+                  </p>
+                </motion.div>
+              )}
+
+              {/* In consultation banner */}
+              {myStatus === 'IN_CONSULTATION' && (
+                <div className="p-3 bg-operational/15 border border-operational/30 rounded-xl text-center">
+                  <span className="text-xs font-mono font-bold text-operational uppercase">
+                    🩺 Currently In Consultation with {myDoc}
+                  </span>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 py-4 border-y border-rule">
                 <div className="p-3 bg-paper-subtle rounded-xl border border-rule">
@@ -934,6 +1384,37 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
           );
         })()}
       </AnimatePresence>
+
+      {/* Patient Live Camera QR Scanner Modal */}
+      <QrScannerModal
+        isOpen={showScannerModal}
+        onClose={() => setShowScannerModal(false)}
+        onSuccess={() => {
+          fetchQueue();
+          if (trackedToken) fetchTokenStatus(trackedToken);
+        }}
+        expectedToken={trackedToken || activePatientAppt?.token_number}
+        expectedAppointmentId={activePatientAppt?.id || trackedStatusData?.appointment_id}
+        demoQrPayload={activePatientAppt?.qr_code || trackedStatusData?.qr_code || trackedToken}
+      />
+
+      {/* QR Pass Modal */}
+      <QrCodeModal
+        isOpen={showQrModal}
+        onClose={() => setShowQrModal(false)}
+        title="Appointment Check-In Pass"
+        type="appointment"
+        data={{
+          token: trackedToken || activePatientAppt?.token_number || '#MED-PASS',
+          id: activePatientAppt?.id || trackedStatusData?.appointment_id || `apt-${Date.now()}`,
+          targetName: activePatientAppt?.doctor_name || trackedStatusData?.doctor_name || 'Assigned OPD Doctor',
+          detail: `Patient: ${activePatient?.name || trackedStatusData?.patient_name || 'Verified Patient'} · Slot: ${activePatientAppt?.time_slot || activePatientAppt?.appointment_time || trackedStatusData?.appointment_time || 'OPD Slot'}`,
+          issuedAt: activePatientAppt?.created_at || new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+          signature: activePatientAppt?.qr_signature || `sig_${trackedToken || 'pass'}`,
+          qrPayload: activePatientAppt?.qr_code || trackedStatusData?.qr_code || trackedToken,
+        }}
+      />
 
     </div>
   );

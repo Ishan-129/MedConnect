@@ -11,6 +11,7 @@ export type AppointmentStatus =
   | 'NO_SHOW';
 
 export type QueueStatus = 
+  | 'BOOKED'
   | 'WAITING' 
   | 'CALLED' 
   | 'IN_CONSULTATION' 

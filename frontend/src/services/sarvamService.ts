@@ -64,9 +64,9 @@ function blobToBase64(blob: Blob): Promise<string> {
  */
 export async function transcribeAudio(
   audioBlob?: Blob | ArrayBuffer | string,
-  language: string = 'Hinglish'
+  language: string = 'English'
 ): Promise<SarvamSTTResult> {
-  const langCode = LANGUAGE_CODE_MAP[language] || 'hi-IN';
+  const langCode = LANGUAGE_CODE_MAP[language] || 'en-IN';
 
   if (audioBlob) {
     try {
@@ -131,7 +131,7 @@ export async function transcribeAudio(
  */
 export async function synthesizeSarvamSpeech(
   text: string,
-  language: string = 'Hinglish',
+  language: string = 'English',
   speaker: string = 'priya'
 ): Promise<SarvamTTSResult> {
   try {
