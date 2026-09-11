@@ -5,22 +5,31 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "emergency-verify-dispatch",
-        "responseMode": "responseNode"
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
       },
       "name": "Webhook - QR Scanned at Supplying Hospital",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 300]
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "node-webhook-qr-handover"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM dispatches WHERE qr_reference = $1 FOR UPDATE;"
+        "query": "SELECT * FROM dispatches WHERE qr_reference = $1 FOR UPDATE;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.qr_reference || $json.qr_code || ($json.body && ($json.body.qr_reference || $json.body.qr_code)) || '' ] }}"
+        }
       },
       "name": "Check Dispatch Record",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [480, 300]
+      "position": [480, 300],
+      "id": "node-check-dispatch-record",
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -36,38 +45,104 @@
       "name": "Is Prepared & Unclaimed?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [700, 300]
+      "position": [700, 300],
+      "id": "node-if-dispatch-prepared"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE dispatches SET status = 'DISPATCHED', verified_at = now() WHERE dispatch_id = $1 RETURNING *;"
+        "query": "UPDATE dispatches SET status = 'DISPATCHED', verified_at = now() WHERE dispatch_id = $1 RETURNING *;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.dispatch_id ] }}"
+        }
       },
       "name": "Mark Dispatched",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [920, 200]
+      "position": [920, 200],
+      "id": "node-mark-dispatched"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'authorized', message: 'Resource release approved for handover to ambulance', dispatch_id: $json.dispatch_id } }}"
+        "responseBody": "={{ { status: 'authorized', success: true, message: 'Resource release approved for handover to ambulance', dispatch_id: $json.dispatch_id, timestamp: new Date().toISOString() } }}",
+        "options": {
+          "responseCode": 200
+        }
       },
       "name": "Release Authorized",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1140, 200]
+      "position": [1140, 200],
+      "id": "node-release-authorized"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseCode": 409,
-        "responseBody": "={{ { status: 'error', error_code: 'ALREADY_DISPATCHED_OR_INVALID', message: 'This QR code has already been verified or is invalid' } }}"
+        "responseBody": "={{ { status: 'error', success: false, error_code: 'ALREADY_DISPATCHED_OR_INVALID', message: 'This QR code has already been verified or is invalid' } }}",
+        "options": {
+          "responseCode": 409
+        }
       },
       "name": "Reject Handover",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [920, 420]
+      "position": [920, 420],
+      "id": "node-reject-handover"
     }
-  ]
+  ],
+  "connections": {
+    "Webhook - QR Scanned at Supplying Hospital": {
+      "main": [
+        [
+          {
+            "node": "Check Dispatch Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Dispatch Record": {
+      "main": [
+        [
+          {
+            "node": "Is Prepared & Unclaimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Prepared & Unclaimed?": {
+      "main": [
+        [
+          {
+            "node": "Mark Dispatched",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Dispatched": {
+      "main": [
+        [
+          {
+            "node": "Release Authorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
 }

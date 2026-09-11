@@ -137,7 +137,57 @@ async function postToN8n<T>(url: string, payload: Record<string, any>, timeoutMs
  * Trigger WF08: Emergency Broadcast Webhook
  */
 export async function triggerEmergencyBroadcast(payload: N8nBroadcastPayload): Promise<N8nBroadcastResponse> {
-  return postToN8n<N8nBroadcastResponse>(N8N_ENDPOINTS.EMERGENCY_BROADCAST, payload);
+  const enrichedPayload = {
+    ...payload,
+    requesting_hospital_id: payload.hospital_id || (payload as any).requesting_hospital_id,
+    requesting_hospital_name: payload.requesting_hospital_name || 'Emergency Center',
+    resource_name: payload.resource_type,
+    resource_type: payload.resource_type,
+    urgency: payload.urgency || 'CRITICAL',
+    quantity: payload.quantity || 1,
+  };
+
+  const res = await postToN8n<any>(N8N_ENDPOINTS.EMERGENCY_BROADCAST, enrichedPayload);
+  if (res.success) {
+    const rawData = res.data || {};
+    const reqId = rawData.requestId || res.request_id || rawData.request_id || payload.request_id || '';
+    const hospitalsCount = rawData.nearbyHospitalsFound ?? res.hospitals_notified ?? (Array.isArray(rawData.matches) ? rawData.matches.length : 1);
+    return {
+      success: true,
+      status: 'BROADCASTED',
+      request_id: reqId,
+      correlation_id: res.correlation_id || generateCorrelationId(),
+      hospitals_notified: hospitalsCount,
+      message: res.message || 'Regional emergency broadcast successfully dispatched via n8n.',
+    };
+  }
+
+  // Fallback candidate if primary endpoint failed
+  if (N8N_ENDPOINTS.EMERGENCY_BROADCAST !== `${N8N_WEBHOOK_BASE}/emergency-broadcast`) {
+    const fallbackRes = await postToN8n<any>(`${N8N_WEBHOOK_BASE}/emergency-broadcast`, enrichedPayload);
+    if (fallbackRes.success) {
+      const rawData = fallbackRes.data || {};
+      const reqId = rawData.requestId || fallbackRes.request_id || rawData.request_id || payload.request_id || '';
+      const hospitalsCount = rawData.nearbyHospitalsFound ?? fallbackRes.hospitals_notified ?? (Array.isArray(rawData.matches) ? rawData.matches.length : 1);
+      return {
+        success: true,
+        status: 'BROADCASTED',
+        request_id: reqId,
+        correlation_id: fallbackRes.correlation_id || generateCorrelationId(),
+        hospitals_notified: hospitalsCount,
+        message: fallbackRes.message || 'Emergency broadcast dispatched via fallback n8n webhook.',
+      };
+    }
+  }
+
+  return {
+    success: false,
+    status: res.status || 'ERROR',
+    request_id: payload.request_id || '',
+    correlation_id: res.correlation_id || generateCorrelationId(),
+    error: res.error || 'N8N_BROADCAST_FAILED',
+    message: res.message || 'n8n emergency broadcast webhook failed to dispatch.',
+  };
 }
 
 /**

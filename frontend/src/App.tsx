@@ -11,6 +11,9 @@ import { pageTransitionVariants } from './lib/motionTokens';
 import { AuthProvider } from './context/AuthContext';
 import { AuthModal } from './components/AuthModal';
 
+import { AuthGate } from './components/AuthGate';
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 function MainAppContent() {
   const [activePortal, setActivePortal] = useState<PortalType>('landing');
   const [patientTab, setPatientTab] = useState<'receptionist' | 'queue'>('receptionist');
@@ -54,27 +57,31 @@ function MainAppContent() {
             exit="exit"
             className="w-full"
           >
-            {activePortal === 'landing' && (
-              <LandingPage onSelectPortal={handleSelectPortal} />
-            )}
+            <ErrorBoundary>
+              {activePortal === 'landing' && (
+                <LandingPage onSelectPortal={handleSelectPortal} />
+              )}
 
-            {activePortal === 'patient' && (
-              <>
-                {patientTab === 'receptionist' && <ReceptionistView />}
-                {patientTab === 'queue' && (
-                  <QueueView defaultRole="patient" hideRoleSwitcher={true} />
-                )}
-              </>
-            )}
+              {activePortal === 'patient' && (
+                <>
+                  {patientTab === 'receptionist' && <ReceptionistView />}
+                  {patientTab === 'queue' && (
+                    <AuthGate role="patient" title="Patient Queue & Token Tracker">
+                      <QueueView defaultRole="patient" hideRoleSwitcher={true} />
+                    </AuthGate>
+                  )}
+                </>
+              )}
 
-            {activePortal === 'hospital' && (
-              <>
-                {hospitalTab === 'emergency' && <EmergencyView />}
-                {hospitalTab === 'queue' && (
-                  <QueueView defaultRole="reception" hideRoleSwitcher={false} />
-                )}
-              </>
-            )}
+              {activePortal === 'hospital' && (
+                <AuthGate role="hospital" title="Hospital Emergency & Desk Command Center">
+                  {hospitalTab === 'emergency' && <EmergencyView />}
+                  {hospitalTab === 'queue' && (
+                    <QueueView defaultRole="reception" hideRoleSwitcher={false} />
+                  )}
+                </AuthGate>
+              )}
+            </ErrorBoundary>
           </motion.div>
         </AnimatePresence>
       </main>

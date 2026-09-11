@@ -73,16 +73,28 @@ export function getAudioContext(): AudioContext | null {
  */
 export function unlockAudioContext(): void {
   const ctx = getAudioContext();
-  if (ctx && ctx.state === 'suspended') {
-    ctx.resume().catch((err) => {
-      console.warn('[speechSynthesis] AudioContext resume failed:', err);
-    });
+  if (ctx) {
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch((err) => {
+        console.warn('[speechSynthesis] AudioContext resume failed:', err);
+      });
+    }
+    // Play 1-sample silent sound to permanently unlock Web Audio in Safari & Chrome
+    try {
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+    } catch {}
   }
 
   // Pre-wake Web Speech API engine
-  if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.paused) {
+  if (typeof window !== 'undefined' && window.speechSynthesis) {
     try {
-      window.speechSynthesis.resume();
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
     } catch {
       // safe ignore
     }
@@ -150,23 +162,33 @@ export function stopSpeaking(): void {
 }
 
 /**
- * Convert base64 data string to ArrayBuffer for Web Audio API decoding
+ * Clean and convert base64 data string to ArrayBuffer safely
  */
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const cleanBase64 = base64.replace(/^data:audio\/[a-z0-9]+;base64,/, '').trim();
-  const binaryString = window.atob(cleanBase64);
+  const clean = base64.replace(/^data:audio\/[a-zA-Z0-9\-]+;base64,/, '').replace(/\s/g, '');
+  const binaryString = window.atob(clean);
   const len = binaryString.length;
-  const bytes = new Uint8Array(len);
+  const buffer = new ArrayBuffer(len);
+  const bytes = new Uint8Array(buffer);
   for (let i = 0; i < len; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
-  return bytes.buffer;
+  return buffer;
+}
+
+/**
+ * Convert base64 data string to Blob for HTML5 Audio playback
+ */
+function base64ToBlob(base64: string, mimeType = 'audio/wav'): Blob {
+  const buffer = base64ToArrayBuffer(base64);
+  return new Blob([buffer], { type: mimeType });
 }
 
 /**
  * Play synthesized Base64 audio returned by Sarvam Bulbul:v3 TTS.
- * Tries Web Audio API first (immune to autoplay timeout once unlocked),
- * then falls back to HTMLAudioElement.
+ * 1. Tries HTML5 Audio Element with Blob URL first (instant hardware playback).
+ * 2. Falls back to Web Audio API buffer node if HTML5 Audio is blocked by autoplay.
+ * 3. Guarantees safety timeouts so audio state never hangs or freezes.
  */
 export async function playBase64Audio(
   base64Audio: string,
@@ -178,93 +200,116 @@ export async function playBase64Audio(
 
   stopSpeaking();
 
-  // Attempt 1: Web Audio API (Best reliability & no autoplay timeout issues)
+  // Attempt 1: HTML5 Audio with Object URL (Extremely reliable for WAV audio across Chrome, Safari, Edge)
   try {
-    const ctx = getAudioContext();
-    if (ctx) {
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
-
-      const arrayBuffer = base64ToArrayBuffer(base64Audio);
-      const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
-        ctx.decodeAudioData(arrayBuffer, resolve, reject);
-      });
-
-      stopSpeaking();
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      currentSourceNode = source;
-      isCurrentlySpeaking = true;
-
-      return await new Promise<boolean>((resolve) => {
-        source.onended = () => {
-          isCurrentlySpeaking = false;
-          currentSourceNode = null;
-          options.onEnd?.();
-          resolve(true);
-        };
-
-        try {
-          options.onStart?.();
-          source.start(0);
-        } catch (startErr) {
-          console.warn('[speechSynthesis] Web Audio source.start failed:', startErr);
-          isCurrentlySpeaking = false;
-          currentSourceNode = null;
-          resolve(false);
-        }
-      });
-    }
-  } catch (webAudioErr) {
-    console.warn('[speechSynthesis] Web Audio playback failed, trying HTMLAudioElement fallback:', webAudioErr);
-  }
-
-  // Attempt 2: HTMLAudioElement fallback
-  try {
-    stopSpeaking();
-    const audioSrc = base64Audio.startsWith('data:')
-      ? base64Audio
-      : `data:audio/wav;base64,${base64Audio}`;
-
-    const audio = new Audio(audioSrc);
+    const blob = base64ToBlob(base64Audio, 'audio/wav');
+    const audioUrl = URL.createObjectURL(blob);
+    const audio = new Audio(audioUrl);
     currentAudioElement = audio;
 
-    return await new Promise<boolean>((resolve) => {
+    const played = await new Promise<boolean>((resolve) => {
+      let isSettled = false;
+      const cleanup = (success: boolean) => {
+        if (isSettled) return;
+        isSettled = true;
+        isCurrentlySpeaking = false;
+        if (currentAudioElement === audio) {
+          currentAudioElement = null;
+        }
+        try {
+          URL.revokeObjectURL(audioUrl);
+        } catch {}
+        if (success) {
+          options.onEnd?.();
+        }
+        resolve(success);
+      };
+
       audio.onplay = () => {
         isCurrentlySpeaking = true;
         options.onStart?.();
       };
 
       audio.onended = () => {
-        isCurrentlySpeaking = false;
-        currentAudioElement = null;
-        options.onEnd?.();
-        resolve(true);
+        cleanup(true);
       };
 
       audio.onerror = (e) => {
-        console.warn('[speechSynthesis] HTML Audio playback error:', e);
-        isCurrentlySpeaking = false;
-        currentAudioElement = null;
-        resolve(false);
+        console.warn('[speechSynthesis] HTML Audio playback error, falling back:', e);
+        options.onError?.(e);
+        cleanup(false);
       };
 
-      audio.play().catch((playErr) => {
-        console.warn('[speechSynthesis] HTML Audio play blocked or rejected:', playErr);
-        isCurrentlySpeaking = false;
-        currentAudioElement = null;
-        resolve(false);
-      });
+      // Play invocation
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((playErr) => {
+          console.warn('[speechSynthesis] HTML Audio play blocked by browser autoplay policy:', playErr);
+          cleanup(false);
+        });
+      }
     });
+
+    if (played) {
+      return true;
+    }
   } catch (htmlAudioErr) {
-    console.warn('[speechSynthesis] HTML Audio initialization failed:', htmlAudioErr);
-    isCurrentlySpeaking = false;
-    currentAudioElement = null;
-    return false;
+    console.warn('[speechSynthesis] HTML Audio element error, attempting Web Audio API:', htmlAudioErr);
   }
+
+  // Attempt 2: Web Audio API (Using unlocked AudioContext destination)
+  try {
+    const ctx = getAudioContext();
+    if (ctx) {
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
+      }
+
+      if (ctx.state === 'running') {
+        const arrayBuffer = base64ToArrayBuffer(base64Audio);
+        const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+          ctx.decodeAudioData(arrayBuffer, resolve, reject);
+        });
+
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        currentSourceNode = source;
+        isCurrentlySpeaking = true;
+
+        return await new Promise<boolean>((resolve) => {
+          let ended = false;
+          const finish = (success: boolean) => {
+            if (ended) return;
+            ended = true;
+            isCurrentlySpeaking = false;
+            currentSourceNode = null;
+            if (success) options.onEnd?.();
+            resolve(success);
+          };
+
+          source.onended = () => finish(true);
+
+          // Safety timeout so it never hangs if onended doesn't fire
+          const maxDurationMs = Math.max((audioBuffer.duration * 1000) + 1500, 3000);
+          setTimeout(() => finish(true), maxDurationMs);
+
+          try {
+            options.onStart?.();
+            source.start(0);
+          } catch (startErr) {
+            console.warn('[speechSynthesis] Web Audio source.start failed:', startErr);
+            finish(false);
+          }
+        });
+      }
+    }
+  } catch (webAudioErr) {
+    console.warn('[speechSynthesis] Web Audio playback failed:', webAudioErr);
+  }
+
+  isCurrentlySpeaking = false;
+  return false;
 }
 
 /**
@@ -319,6 +364,20 @@ export function speakWithWebSpeech(
       utt.pitch = pitch;
       utt.volume = volume;
 
+      // Cancel any ongoing utterance before queuing the new one
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        if (window.speechSynthesis.speaking) {
+          try {
+            window.speechSynthesis.cancel();
+          } catch {}
+        }
+        if (window.speechSynthesis.paused) {
+          try {
+            window.speechSynthesis.resume();
+          } catch {}
+        }
+      }
+
       // Keep utterance in global scope to prevent Chrome V8 garbage collection bug
       activeUtterance = utt;
       (window as any).__activeSpeechUtterance = utt;
@@ -372,8 +431,7 @@ export function speakWithWebSpeech(
         resolve(false);
       };
 
-      // In Chrome, cancel() right before speak() drops the utterance unless delayed slightly
-      stopSpeaking();
+      // Slight delay for Chrome audio subsystem readiness
       setTimeout(() => {
         try {
           if (window.speechSynthesis.paused) {
@@ -387,7 +445,7 @@ export function speakWithWebSpeech(
           onError?.(speakErr);
           resolve(false);
         }
-      }, 60);
+      }, 50);
     } catch (err) {
       console.error('[speechSynthesis] Exception while initiating Web Speech:', err);
       isCurrentlySpeaking = false;

@@ -5,42 +5,94 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "queue-event",
-        "responseMode": "responseNode"
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
       },
       "name": "Webhook - Queue State Transition",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 300]
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "node-webhook-queue-event"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE queue_entries SET status = $1 WHERE queue_id = $2 RETURNING *;"
+        "query": "UPDATE queue_entries SET status = $1 WHERE queue_id = $2 RETURNING *;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.body ? $json.body.status : $json.status, $json.body ? $json.body.queue_id : $json.queue_id ] }}"
+        }
       },
       "name": "Update Queue Entry Status",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [460, 300]
+      "position": [460, 300],
+      "id": "node-update-queue-status"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH numbered AS (SELECT queue_id, ROW_NUMBER() OVER (ORDER BY check_in_at ASC) as new_pos FROM queue_entries WHERE doctor_id = $1 AND status = 'WAITING') UPDATE queue_entries q SET position = n.new_pos FROM numbered n WHERE q.queue_id = n.queue_id;"
+        "query": "WITH numbered AS (SELECT queue_id, ROW_NUMBER() OVER (ORDER BY check_in_at ASC) as new_pos FROM queue_entries WHERE doctor_id = $1 AND status = 'WAITING') UPDATE queue_entries q SET position = n.new_pos FROM numbered n WHERE q.queue_id = n.queue_id;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.doctor_id || $('Update Queue Entry Status').item.json.doctor_id ] }}"
+        }
       },
       "name": "Recalculate Doctor Positions",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [680, 300]
+      "position": [680, 300],
+      "id": "node-recalculate-positions"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'ok', updated_id: $json.queue_id, new_status: $json.status } }}"
+        "responseBody": "={{ { status: 'ok', success: true, updated_id: $('Update Queue Entry Status').item.json.queue_id, new_status: $('Update Queue Entry Status').item.json.status, doctor_id: $('Update Queue Entry Status').item.json.doctor_id, timestamp: new Date().toISOString() } }}",
+        "options": {
+          "responseCode": 200
+        }
       },
       "name": "Respond Queue Updated",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [900, 300]
+      "position": [900, 300],
+      "id": "node-respond-queue-updated"
     }
-  ]
+  ],
+  "connections": {
+    "Webhook - Queue State Transition": {
+      "main": [
+        [
+          {
+            "node": "Update Queue Entry Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Queue Entry Status": {
+      "main": [
+        [
+          {
+            "node": "Recalculate Doctor Positions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recalculate Doctor Positions": {
+      "main": [
+        [
+          {
+            "node": "Respond Queue Updated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
 }

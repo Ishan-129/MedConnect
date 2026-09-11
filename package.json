@@ -12,7 +12,8 @@
     "seed": "node scripts/seed-db.js",
     "test:concurrency": "node scripts/test-concurrency.js",
     "test:receptionist": "node scripts/test-receptionist-backend.js",
-    "test:all": "node scripts/test-concurrency.js && node scripts/test-receptionist-backend.js"
+    "test:auth": "node scripts/test-auth-phase2.js",
+    "test:all": "node scripts/test-auth-phase2.js && node scripts/test-concurrency.js && node scripts/test-receptionist-backend.js"
   },
   "keywords": [
     "healthcare",

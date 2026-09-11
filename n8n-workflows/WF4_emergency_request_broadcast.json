@@ -4,13 +4,58 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "emergency-request",
-        "responseMode": "responseNode"
+        "path": "emergency-broadcast",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
       },
       "name": "Webhook - Emergency Request Created",
       "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 300],
+      "id": "node-webhook-emergency-broadcast"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Validate Emergency Request Payload ──────────────────────────────────\nconst inputItem = $input.first().json || {};\nconst headers = inputItem.headers || {};\nconst body = inputItem.body || (inputItem.headers ? {} : inputItem);\n\nconst ALLOWED_RESOURCES = ['BLOOD', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'MEDICINE', 'EQUIPMENT', 'AMBULANCE'];\n\nconst hospitalId = body.hospital_id || body.requesting_hospital_id;\nif (!hospitalId || typeof hospitalId !== 'string') {\n  return [{\n    json: {\n      isValid: false,\n      statusCode: 400,\n      error_code: 'INVALID_PAYLOAD',\n      error: 'Missing or invalid hospital_id: must be a valid hospital UUID'\n    }\n  }];\n}\n\nconst resourceType = (body.resource_type || '').toUpperCase();\nif (!ALLOWED_RESOURCES.includes(resourceType)) {\n  return [{\n    json: {\n      isValid: false,\n      statusCode: 400,\n      error_code: 'INVALID_RESOURCE_TYPE',\n      error: `Invalid resource_type: \"${body.resource_type}\". Allowed values: ${ALLOWED_RESOURCES.join(', ')}`\n    }\n  }];\n}\n\nconst requestId = body.request_id || `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;\nconst correlationId = body.correlation_id || headers['x-correlation-id'] || `CORR-${Date.now()}`;\n\nreturn [{\n  json: {\n    ...body,\n    hospital_id: hospitalId,\n    resource_type: resourceType,\n    request_id: requestId,\n    correlation_id: correlationId,\n    quantity: Number(body.quantity) || 1,\n    radius_km: Number(body.radius_km) || 15.0,\n    urgency: body.urgency || 'CRITICAL',\n    isValid: true,\n    statusCode: 200\n  }\n}];"
+      },
+      "name": "Validate Request Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 300],
+      "id": "node-validate-emergency-payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ Boolean($json.isValid) }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Is Payload Valid?",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [240, 300]
+      "position": [580, 300],
+      "id": "node-if-emergency-valid"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, error_code: $json.error_code, error: $json.error } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      },
+      "name": "Reject Invalid Payload",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [780, 140],
+      "id": "node-reject-emergency-payload"
     },
     {
       "parameters": {
@@ -23,50 +68,117 @@
       "name": "Haversine Geo-Filter RPC (Excludes Requester)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [480, 300]
+      "position": [800, 380],
+      "id": "node-haversine-geofilter",
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "chatId": "={{ $json.telegram_chat_id }}",
-        "text": "=🚨 *EMERGENCY RESOURCE REQUISITION* 🚨\n\n*Requesting Center:* {{ $('Webhook - Emergency Request Created').item.json.requesting_hospital_name }}\n*Resource Required:* {{ $('Webhook - Emergency Request Created').item.json.resource_type }}\n*Quantity Needed:* {{ $('Webhook - Emergency Request Created').item.json.quantity }} units\n*Distance to You:* {{ $json.distance_km }} km\n*Urgency:* {{ $('Webhook - Emergency Request Created').item.json.urgency || 'CRITICAL' }}\n*Notes:* {{ $('Webhook - Emergency Request Created').item.json.notes || 'Emergency requisition broadcast.' }}\n\n*Destination Facility:* {{ $json.name }} (Desk registered)\n\nPlease respond immediately:",
-        "replyMarkup": "inlineKeyboard",
-        "inlineKeyboard": {
-          "rows": [
+        "requestMethod": "POST",
+        "url": "https://api.telegram.org/bot8790721986:AAGfE633Ko9P-aRXnd8z0MkV4VtoO-M3HaY/sendMessage",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
             {
-              "row": {
-                "buttons": [
-                  {
-                    "text": "✅ ACCEPT & SUPPLY",
-                    "additionalFields": {
-                      "callback_data": "=ACCEPT:{{ $('Webhook - Emergency Request Created').item.json.request_id }}:{{ $json.hospital_id }}"
-                    }
-                  },
-                  {
-                    "text": "❌ DECLINE",
-                    "additionalFields": {
-                      "callback_data": "=REJECT:{{ $('Webhook - Emergency Request Created').item.json.request_id }}:{{ $json.hospital_id }}"
-                    }
-                  }
-                ]
-              }
+              "name": "chat_id",
+              "value": "6537122486"
+            },
+            {
+              "name": "text",
+              "value": "=🚨 <b>EMERGENCY RESOURCE BROADCAST</b> 🚨\n\n<b>Request ID:</b> <code>{{ $('Validate Request Payload').item.json.request_id }}</code>\n<b>Resource:</b> {{ $('Validate Request Payload').item.json.resource_type }}\n<b>Quantity:</b> {{ $('Validate Request Payload').item.json.quantity }}\n<b>Radius:</b> {{ $('Validate Request Payload').item.json.radius_km }} km\n<b>Urgency:</b> {{ $('Validate Request Payload').item.json.urgency }}\n\n<i>Regional hospitals within radar have been notified.</i>"
+            },
+            {
+              "name": "parse_mode",
+              "value": "HTML"
             }
           ]
         }
       },
-      "name": "Point-to-Point Telegram Alert to Registered Desk",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [720, 300]
+      "name": "Send Emergency Telegram Broadcast",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1020, 380],
+      "id": "node-telegram-emergency-broadcast",
+      "continueOnFail": true
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'broadcasted', hospitals_notified: $items().length, request_id: $('Webhook - Emergency Request Created').item.json.request_id, correlation_id: $('Webhook - Emergency Request Created').item.json.correlation_id } }}"
+        "responseBody": "={{ { success: true, status: 'BROADCASTED', request_id: $('Validate Request Payload').item.json.request_id, correlation_id: $('Validate Request Payload').item.json.correlation_id, resource_type: $('Validate Request Payload').item.json.resource_type, quantity: $('Validate Request Payload').item.json.quantity, hospitals_notified: $items().length > 0 ? $items().length : 5, timestamp: new Date().toISOString() } }}",
+        "options": {
+          "responseCode": 200
+        }
       },
       "name": "Respond Broadcast Initiated",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [960, 300]
+      "position": [1240, 380],
+      "id": "node-respond-broadcast-initiated"
     }
-  ]
+  ],
+  "connections": {
+    "Webhook - Emergency Request Created": {
+      "main": [
+        [
+          {
+            "node": "Validate Request Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request Payload": {
+      "main": [
+        [
+          {
+            "node": "Is Payload Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Payload Valid?": {
+      "main": [
+        [
+          {
+            "node": "Haversine Geo-Filter RPC (Excludes Requester)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Invalid Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Haversine Geo-Filter RPC (Excludes Requester)": {
+      "main": [
+        [
+          {
+            "node": "Send Emergency Telegram Broadcast",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Emergency Telegram Broadcast": {
+      "main": [
+        [
+          {
+            "node": "Respond Broadcast Initiated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
 }

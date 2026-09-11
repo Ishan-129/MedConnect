@@ -170,10 +170,37 @@ export async function processReceptionistTurn(input) {
 
 async function processReceptionistTurnRaw(input) {
   const allHospitals = await db.getHospitals();
-  const defaultHospital = allHospitals.find(h => h.name.includes('Yashoda')) || allHospitals[0];
-  const hospitalId = (input.hospitalId && input.hospitalId !== '11111111-1111-4111-a111-111111111111')
-    ? input.hospitalId
-    : (defaultHospital?.id || defaultHospital?.hospital_id || '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0');
+  const defaultHospital = allHospitals.find(h => h.id === '11111111-1111-4111-a111-111111111111') || allHospitals.find(h => h.name.includes('AIIMS')) || allHospitals[0];
+  let hospitalId = input.hospitalId || defaultHospital?.id || defaultHospital?.hospital_id || '11111111-1111-4111-a111-111111111111';
+
+  let doctors = await db.getDoctors(hospitalId);
+  if (!doctors || doctors.length === 0) {
+    doctors = await db.getDoctors();
+  }
+  let departments = await db.getDepartments(hospitalId);
+  if (!departments || departments.length === 0) {
+    departments = await db.getDepartments('11111111-1111-4111-a111-111111111111');
+  }
+
+  const findDocMatch = (nameStr) => {
+    if (!nameStr) return null;
+    const clean = nameStr.toLowerCase().replace(/dr\.?\s*/i, '').trim();
+    if (!clean || clean.length < 3) return null;
+    const exact = doctors.find(d => {
+      const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
+      return dClean.includes(clean) || clean.includes(dClean);
+    });
+    if (exact) return exact;
+    const firstName = clean.split(/\s+/)[0];
+    if (firstName && firstName.length >= 4) {
+      const matchedByFirst = doctors.filter(d => {
+        const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
+        return dClean.split(/\s+/)[0] === firstName;
+      });
+      if (matchedByFirst.length === 1) return matchedByFirst[0];
+    }
+    return null;
+  };
 
   const configStatus = getReceptionistConfigStatus();
   const currentContext = { ...(input.context || {}) };
@@ -223,29 +250,7 @@ async function processReceptionistTurnRaw(input) {
   const shouldUseN8n = input.useN8n === true || input.routeViaN8n === true || process.env.ENABLE_N8N_ROUTING === 'true';
   if (shouldUseN8n && !isMultiTurn) {
     try {
-      const doctors = await db.getDoctors(hospitalId);
-
-    const findDocMatch = (nameStr) => {
-      if (!nameStr) return null;
-      const clean = nameStr.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-      if (!clean || clean.length < 3) return null;
-      const exact = doctors.find(d => {
-        const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-        return dClean.includes(clean) || clean.includes(dClean);
-      });
-      if (exact) return exact;
-      const firstName = clean.split(/\s+/)[0];
-      if (firstName && firstName.length >= 4) {
-        const matchedByFirst = doctors.filter(d => {
-          const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-          return dClean.split(/\s+/)[0] === firstName;
-        });
-        if (matchedByFirst.length === 1) return matchedByFirst[0];
-      }
-      return null;
-    };
-
-    const shouldCallN8n = input.useN8n !== false && input.routeViaN8n !== false;
+      const shouldCallN8n = input.useN8n !== false && input.routeViaN8n !== false;
     const n8nRes = shouldCallN8n ? await callN8nAiReceptionist({
       channel: input.channel || (input.audioBlob ? 'mic' : 'text'),
       text: transcriptText,
@@ -374,10 +379,19 @@ async function processReceptionistTurnRaw(input) {
         // Persist atomic booking in DB so cancellation & queue lookups find it
         try {
           const matchedDoc = findDocMatch(docName) || doctors[0];
+          const actualHospId = matchedDoc?.hospital_id || hospitalId;
           const availableSlots = await db.calculateAvailableSlots(matchedDoc.id || matchedDoc.doctor_id, targetDate);
           const matchedSlot = availableSlots[0] || { id: 'slot-n8n-' + Date.now(), start_time: `${targetDate}T10:00:00Z` };
+
+          let patient = await db.getPatientByPhone(patientPhone);
+          if (!patient) {
+            patient = await db.createPatient({ name: patientName, phone: patientPhone });
+          }
+          const realPatientId = patient?.patient_id || patient?.id;
+
           await db.bookAppointmentAtomic({
-            hospital_id: hospitalId,
+            hospital_id: actualHospId,
+            patient_id: realPatientId,
             patient_name: patientName,
             patient_phone: patientPhone,
             doctor_id: matchedDoc.id || matchedDoc.doctor_id,
@@ -387,7 +401,7 @@ async function processReceptionistTurnRaw(input) {
             symptoms: `n8n AI Receptionist: ${transcriptText}`,
           });
         } catch (dbErr) {
-          // Graceful fallback
+          console.warn('[receptionistService] Atomic booking persistence notice:', dbErr.message);
         }
 
         // Trigger n8n Queue Notification Workflow (WF05)
@@ -471,34 +485,91 @@ async function processReceptionistTurnRaw(input) {
         const resolvedDoctorName = matchedDoc ? matchedDoc.name : (actionPayload?.token?.doctor || 'Dr. Rajesh Sharma');
         const resolvedDepartmentName = matchedDept ? matchedDept.name : (matchedDoc?.department_name || actionPayload?.department || 'Orthopedics');
 
+        // Check if user specified a specialty/department in transcript (e.g., cardiologist, cardiology, orthopedics)
+        const isCardio = /\b(cardio|cardiologist|cardiology|heart)\b/i.test(transcriptText);
+        const isOrtho = /\b(ortho|orthopedic|bone|joint)\b/i.test(transcriptText);
+        const isDerm = /\b(derm|skin|rash)\b/i.test(transcriptText);
+        const isNeuro = /\b(neuro|headache|migraine)\b/i.test(transcriptText);
+
+        let targetDept = matchedDept;
+        if (isCardio) targetDept = departments.find(d => d.name.toLowerCase().includes('cardio')) || targetDept;
+        else if (isOrtho) targetDept = departments.find(d => d.name.toLowerCase().includes('ortho')) || targetDept;
+        else if (isDerm) targetDept = departments.find(d => d.name.toLowerCase().includes('derm')) || targetDept;
+        else if (isNeuro) targetDept = departments.find(d => d.name.toLowerCase().includes('neuro')) || targetDept;
+
+        const targetDoctor = (targetDept && doctors.find(d => (d.department_id === targetDept.id || d.department_id === targetDept.department_id))) || matchedDoc;
+
+        const isTomorrow = /\b(tomorrow|kal)\b/i.test(transcriptText);
+        const targetDate = isTomorrow
+          ? new Date(Date.now() + 86400000).toISOString().split('T')[0]
+          : (actionPayload?.token?.date || new Date().toISOString().split('T')[0]);
+
+        const resolvedDoctor = targetDoctor || matchedDoc;
+        const resolvedDept = targetDept || matchedDept;
+        const docName = resolvedDoctor?.name || n8nRes.validatedSlots?.doctorName || resolvedDoctorName;
+        const deptName = resolvedDept?.name || n8nRes.validatedSlots?.departmentName || resolvedDepartmentName;
+        const docId = resolvedDoctor?.doctor_id || resolvedDoctor?.id;
+        const deptId = resolvedDept?.department_id || resolvedDept?.id;
+
+        let availableSlotList = [];
+        if (docId) {
+          try {
+            availableSlotList = await db.calculateAvailableSlots(docId, targetDate);
+          } catch {}
+        }
+
         const resolvedValidatedSlots = {
-          doctorName: resolvedDoctorName,
-          departmentName: resolvedDepartmentName,
-          date: actionPayload?.token?.date || new Date().toISOString().split('T')[0],
-          timeSlot: actionPayload?.token?.time || '10:30 AM',
+          timeSlot: actionPayload?.token?.time || (availableSlotList[0] || '10:30 AM'),
           patientName: actionPayload?.token?.patient || 'Patient',
           token: tokenNum,
           ...(n8nRes.validatedSlots || {}),
+          doctorName: docName,
+          departmentName: deptName,
+          doctorId: docId,
+          departmentId: deptId,
+          date: targetDate,
         };
-        if (!resolvedValidatedSlots.doctorName || resolvedValidatedSlots.doctorName === 'Doctor') {
-          resolvedValidatedSlots.doctorName = resolvedDoctorName;
+
+        let enrichedAiMessage = finalMessage;
+        let enrichedSpoken = spoken;
+        if (!tokenNum && (n8nRes.status === 'NEEDS_MORE_INFO' || intent === 'BOOK_APPOINTMENT')) {
+          if (resolvedDept && resolvedDoctor) {
+            const slotSummary = availableSlotList.length > 0 ? ` Open slots: ${availableSlotList.slice(0, 4).join(', ')}.` : '';
+            enrichedAiMessage = `Sure! I have located ${resolvedDoctor.name} in ${resolvedDept.name} available on ${targetDate}.${slotSummary} Which time slot would you prefer?`;
+            enrichedSpoken = enrichedAiMessage;
+          }
         }
-        if (!resolvedValidatedSlots.departmentName) {
-          resolvedValidatedSlots.departmentName = resolvedDepartmentName;
-        }
+
+        const enrichedContext = {
+          ...currentContext,
+          ...(n8nRes.context || {}),
+          pendingIntent: 'BOOK_APPOINTMENT',
+          stage: tokenNum ? 'CONFIRMED' : 'AWAITING_SLOT',
+          departmentName: deptName,
+          departmentId: deptId,
+          doctorName: docName,
+          doctorId: docId,
+          preferredDate: targetDate,
+          date: targetDate,
+        };
+
+        const suggestedActions = (availableSlotList.length > 0 ? availableSlotList : ['09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM'])
+          .slice(0, 4)
+          .map(s => ({ label: `⏰ ${s}`, text: s }));
 
         return {
           success: n8nRes.success ?? true,
           status: n8nRes.status || 'ACTION_COMPLETED',
           intent,
           transcript: transcriptText,
-          aiMessage: finalMessage,
-          spokenText: spoken,
+          aiMessage: enrichedAiMessage,
+          spokenText: enrichedSpoken,
           configurationStatus: configStatus,
           validatedSlots: resolvedValidatedSlots,
+          suggestedActions,
           missingSlots: n8nRes.missingSlots,
           actionPayload,
-          context: { ...currentContext, ...(n8nRes.context || {}) },
+          context: enrichedContext,
         };
       }
       }
@@ -524,30 +595,6 @@ async function processReceptionistTurnRaw(input) {
   const patientPhone = extracted.patientPhone || currentContext.patientPhone || '+91 98999 12345';
   const tokenIdQuery = extracted.tokenId || currentContext.tokenId;
 
-  const doctors = await db.getDoctors(hospitalId);
-  const departments = await db.getDepartments(hospitalId);
-
-  const findDocMatch = (nameStr) => {
-    if (!nameStr) return null;
-    const clean = nameStr.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-    if (!clean || clean.length < 3) return null;
-    // Direct inclusion
-    const exact = doctors.find(d => {
-      const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-      return dClean.includes(clean) || clean.includes(dClean);
-    });
-    if (exact) return exact;
-    // First name match (e.g., Ananya matches Dr. Ananya Roy / Dr. Ananya Sharma)
-    const firstName = clean.split(/\s+/)[0];
-    if (firstName && firstName.length >= 4) {
-      const matchedByFirst = doctors.filter(d => {
-        const dClean = d.name.toLowerCase().replace(/dr\.?\s*/i, '').trim();
-        return dClean.split(/\s+/)[0] === firstName;
-      });
-      if (matchedByFirst.length === 1) return matchedByFirst[0];
-    }
-    return null;
-  };
 
   // 4. Strict Backend Validation Engine against Database
   switch (intent) {
@@ -739,6 +786,12 @@ async function processReceptionistTurnRaw(input) {
           aiMessage: `${selectedDoctor.name} (${selectedDepartment?.name || 'OPD'}) ke pass ${targetDate} ko ye time slots available hain: ${firstSlots}. Aap kis samay aana chahenge?`,
           configurationStatus: configStatus,
           missingSlots: ['timeSlot'],
+          validatedSlots: {
+            doctorName: selectedDoctor.name,
+            departmentName: selectedDepartment?.name,
+            date: targetDate,
+            doctorId: selectedDoctor.doctor_id || selectedDoctor.id,
+          },
           suggestedActions: availableSlots.slice(0, 4).map(s => ({ label: `⏰ ${s}`, text: `${selectedDoctor.name} at ${s}` })),
           context: {
             ...currentContext,
@@ -782,6 +835,8 @@ async function processReceptionistTurnRaw(input) {
           symptoms: `Voice AI Receptionist Booking: ${transcriptText}`,
         });
 
+        const actualToken = bookResult.token_number || bookResult.token || bookResult.appointment?.token_number || token;
+
         // Send Telegram Confirmation
         sendAppointmentConfirmation({
           patientPhone,
@@ -789,7 +844,7 @@ async function processReceptionistTurnRaw(input) {
           doctorName: selectedDoctor.name,
           date: targetDate,
           time: selectedSlot,
-          token,
+          token: actualToken,
         }).catch(() => {});
 
         // Trigger n8n Workflow (MEDCONNECT | WF05 | QUEUE NOTIFICATION)
@@ -798,7 +853,7 @@ async function processReceptionistTurnRaw(input) {
           patient_id: patient.id || patient.patient_id,
           patient_name: patientName,
           phone_number: patientPhone,
-          token_number: token,
+          token_number: actualToken,
           queue_position: 1,
           estimated_wait_minutes: 10,
           doctor_name: selectedDoctor.name,
@@ -812,7 +867,7 @@ async function processReceptionistTurnRaw(input) {
           status: 'ACTION_COMPLETED',
           intent,
           transcript: transcriptText,
-          aiMessage: `Aapka appointment successful book ho gaya hai! Doctor: ${selectedDoctor.name}, Date: ${targetDate}, Time: ${selectedSlot}. Aapka Queue Token ID hai: ${token}.`,
+          aiMessage: `Aapka appointment successful book ho gaya hai! Doctor: ${selectedDoctor.name}, Date: ${targetDate}, Time: ${selectedSlot}. Aapka Queue Token ID hai: ${actualToken}.`,
           configurationStatus: configStatus,
           validatedSlots: {
             doctorName: selectedDoctor.name,
@@ -820,7 +875,7 @@ async function processReceptionistTurnRaw(input) {
             date: targetDate,
             timeSlot: selectedSlot,
             patientName,
-            token,
+            token: actualToken,
           },
           actionPayload: {
             appointment: bookResult.appointment || {
@@ -829,9 +884,10 @@ async function processReceptionistTurnRaw(input) {
               appointment_date: targetDate,
               appointment_time: selectedSlot,
               status: 'BOOKED',
+              token_number: actualToken,
             },
             token: {
-              token_number: token,
+              token_number: actualToken,
               doctor: selectedDoctor.name,
               date: targetDate,
               time: selectedSlot,

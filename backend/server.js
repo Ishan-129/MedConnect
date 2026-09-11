@@ -8,30 +8,43 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db } from './db.js';
+import { db, formatTo12Hour } from './db.js';
 import { processReceptionistTurn, getReceptionistConfigStatus, getWelcomeMessage } from './services/receptionistService.js';
-import { calculateAvailableSlots, bookAppointment, cancelAppointment, getAppointments } from './services/appointmentService.js';
+import { calculateAvailableSlots, getAllDoctorSlots, bookAppointment, bookEmergencyAppointment, cancelAppointment, getAppointments } from './services/appointmentService.js';
 import { getHospitals, getDepartments, getDoctors, searchDoctors } from './services/hospitalService.js';
-import { getQueueStatus, getQueueEntries } from './services/queueService.js';
-import { login, verifySession } from './services/authService.js';
+import { getQueueStatus, getQueueEntries, callNextPatient, advancePatientStatus } from './services/queueService.js';
+import { login, signup, verifySession } from './services/authService.js';
 import { transcribeAudio, synthesizeSpeech, verifySarvamConnection, getSarvamCredentials } from './services/sarvamService.js';
 import { getOpenAICredentials } from './services/openaiService.js';
+import { sendTelegramAlert } from './services/notificationService.js';
 
-// Load environment
-const envPath = path.resolve(process.cwd(), '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  for (const line of envContent.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith('#')) {
-      const idx = trimmed.indexOf('=');
-      if (idx > 0) {
-        const key = trimmed.slice(0, idx).trim();
-        const value = trimmed.slice(idx + 1).trim();
-        if (!process.env[key]) {
-          process.env[key] = value;
+// Load environment from multiple candidate locations (.env in cwd, parent, or backend dir)
+const envCandidates = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '../.env'),
+  path.resolve(path.dirname(new URL(import.meta.url).pathname), '.env'),
+  path.resolve(path.dirname(new URL(import.meta.url).pathname), '../.env'),
+];
+
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath)) {
+    try {
+      const envContent = fs.readFileSync(envPath, 'utf8');
+      for (const line of envContent.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('#')) {
+          const idx = trimmed.indexOf('=');
+          if (idx > 0) {
+            const key = trimmed.slice(0, idx).trim();
+            const value = trimmed.slice(idx + 1).trim();
+            if (!process.env[key]) {
+              process.env[key] = value;
+            }
+          }
         }
       }
+    } catch (e) {
+      // ignore
     }
   }
 }
@@ -96,6 +109,15 @@ async function readBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+async function authenticateRequest(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return { valid: false, user: null, error: 'MISSING_AUTHORIZATION_TOKEN' };
+  }
+  return verifySession(token);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -194,7 +216,7 @@ const server = http.createServer(async (req, res) => {
     // -------------------------------------------------------------
     // DOCTORS SEARCH
     // -------------------------------------------------------------
-    if (pathname === '/api/doctors' && req.method === 'GET') {
+    if ((pathname === '/api/doctors' || pathname === '/api/appointments/doctors') && req.method === 'GET') {
       const hospitalId = reqUrl.searchParams.get('hospitalId');
       const departmentId = reqUrl.searchParams.get('departmentId');
       const departmentName = reqUrl.searchParams.get('departmentName');
@@ -213,7 +235,7 @@ const server = http.createServer(async (req, res) => {
           (d.specialization && d.specialization.toLowerCase().includes(dName))
         );
       }
-      return sendJson(res, 200, { doctors });
+      return sendJson(res, 200, { success: true, count: (doctors || []).length, doctors });
     }
 
     // -------------------------------------------------------------
@@ -236,18 +258,137 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'MISSING_DOCTOR_ID', message: 'doctorId is required' });
       }
 
-      const slots = await calculateAvailableSlots(doctorId, date);
-      return sendJson(res, 200, { doctorId, date, slots });
+      const allDoctorSlots = await getAllDoctorSlots(doctorId, date);
+      // Available slot display strings for backward compatibility
+      const slots = allDoctorSlots
+        .filter(s => (s.status || '').toUpperCase() === 'AVAILABLE')
+        .map(s => s.display_time || formatTo12Hour(s.start_time));
+
+      // Detailed slots for rich interactive UI
+      const detailedSlots = allDoctorSlots.map(s => ({
+        slot_id: s.slot_id || s.id,
+        id: s.slot_id || s.id,
+        doctor_id: s.doctor_id,
+        date: s.date || s.slot_date || date,
+        start_time: s.start_time,
+        end_time: s.end_time,
+        display_time: s.display_time || formatTo12Hour(s.start_time),
+        status: (s.status || '').toUpperCase() === 'AVAILABLE' ? 'AVAILABLE' : 'BOOKED',
+        available: (s.status || '').toUpperCase() === 'AVAILABLE',
+      }));
+
+      return sendJson(res, 200, {
+        doctorId,
+        date,
+        slots,
+        detailedSlots,
+        totalSlots: detailedSlots.length,
+        availableCount: slots.length,
+        bookedCount: detailedSlots.length - slots.length,
+      });
     }
 
     if (pathname === '/api/appointments/book' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth.valid || !auth.user) {
+        return sendJson(res, 401, {
+          error: 'UNAUTHORIZED',
+          message: 'Authentication required to book an appointment. Please sign in or register.',
+        });
+      }
+
       const body = await readBody(req);
+
+      // Enforce verified user identity — NEVER blindly trust frontend user ID
+      body.patientId = auth.user.id;
+      body.patient_id = auth.user.id;
+      body.patientName = auth.user.name || body.patientName || 'Patient';
+      body.patient_name = auth.user.name || body.patientName || 'Patient';
+      body.patientPhone = auth.user.phone || body.patientPhone;
+      body.patient_phone = auth.user.phone || body.patientPhone;
+
       try {
         const booking = await bookAppointment(body);
+        if (booking && booking.success === false) {
+          return sendJson(res, 409, {
+            success: false,
+            error: booking.error || 'SLOT_UNAVAILABLE',
+            message: booking.message || 'Slot is unavailable',
+          });
+        }
         return sendJson(res, 200, booking);
       } catch (err) {
-        return sendJson(res, 400, { error: 'BOOKING_FAILED', message: err.message });
+        const isSlotConflict = err.message?.toLowerCase().includes('booked') || err.message?.toLowerCase().includes('slot');
+        return sendJson(res, isSlotConflict ? 409 : 400, {
+          success: false,
+          error: isSlotConflict ? 'SLOT_ALREADY_BOOKED' : 'BOOKING_FAILED',
+          message: err.message,
+        });
       }
+    }
+
+    if (pathname === '/api/appointments/emergency' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      const body = await readBody(req);
+
+      if (auth.valid && auth.user) {
+        body.patientId = auth.user.id;
+        body.patient_id = auth.user.id;
+        body.patientName = auth.user.name || body.patientName || 'Emergency Patient';
+        body.patient_name = auth.user.name || body.patientName || 'Emergency Patient';
+        body.patientPhone = auth.user.phone || body.patientPhone;
+        body.patient_phone = auth.user.phone || body.patientPhone;
+      } else {
+        if (!body.patientPhone && !body.patient_phone) {
+          return sendJson(res, 401, {
+            error: 'UNAUTHORIZED',
+            message: 'Authentication or valid patient phone number is required for emergency appointment.',
+          });
+        }
+      }
+
+      try {
+        const result = await bookEmergencyAppointment(body);
+        if (!result || result.success === false) {
+          return sendJson(res, 409, {
+            success: false,
+            error: result?.error || 'NO_EMERGENCY_SLOT_AVAILABLE',
+            message: result?.message || 'No suitable emergency slot currently available',
+            department: result?.department,
+            fallback: result?.fallback || {
+              emergency_contact: '102',
+              action: 'CONTACT_EMERGENCY_DESK',
+              alternate_hospitals_url: '/api/hospitals/nearby',
+            },
+          });
+        }
+        return sendJson(res, 200, result);
+      } catch (err) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'EMERGENCY_BOOKING_FAILED',
+          message: err.message,
+        });
+      }
+    }
+
+    if (pathname === '/api/appointments' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      const patientId = reqUrl.searchParams.get('patientId') || reqUrl.searchParams.get('patient_id') || (auth.valid && auth.user?.role === 'patient' ? auth.user.id : null);
+      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id') || (auth.valid && auth.user?.role === 'hospital' ? auth.user.id : null);
+      const doctorId = reqUrl.searchParams.get('doctorId') || reqUrl.searchParams.get('doctor_id');
+      const phone = reqUrl.searchParams.get('phone') || reqUrl.searchParams.get('patientPhone');
+      const status = reqUrl.searchParams.get('status');
+
+      const appointments = await db.getAppointments({
+        patient_id: patientId,
+        hospital_id: hospitalId,
+        doctor_id: doctorId,
+        phone,
+        status,
+      });
+
+      return sendJson(res, 200, { success: true, count: appointments.length, appointments });
     }
 
     if (pathname === '/api/appointments/check' && req.method === 'GET') {
@@ -280,40 +421,242 @@ const server = http.createServer(async (req, res) => {
     }
 
     // -------------------------------------------------------------
-    // LIVE QUEUE STATUS
+    // REAL QR VERIFICATION & CHECK-IN (Phase 5)
+    // -------------------------------------------------------------
+    if ((pathname === '/api/qr/verify' || pathname === '/api/qr/check-in') && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      const user = auth.valid ? auth.user : null;
+      const body = await readBody(req);
+
+      const qrData = body.qr_data || body.qrData || body.qr_code || body.qrString || body.data;
+      const tokenId = body.tokenId || body.token || body.token_number;
+      const appointmentId = body.appointmentId || body.id;
+      const isCheckInRoute = pathname === '/api/qr/check-in';
+      const action = isCheckInRoute ? 'check_in' : (body.action || 'verify');
+      const passType = body.type || (typeof qrData === 'object' && qrData?.type);
+
+      let result;
+      if (passType === 'emergency_dispatch') {
+        result = await db.verifyAndRedeemDispatchPass({
+          qrData,
+          dispatchId: body.dispatch_id || body.dispatchId || appointmentId,
+          tokenHash: body.token_hash || body.qr_token_hash || tokenId,
+          action,
+          user,
+        });
+      } else {
+        result = await db.verifyAndCheckInAppointment({
+          qrData,
+          tokenId,
+          appointmentId,
+          action,
+          user,
+        });
+      }
+
+      let statusCode = 200;
+      if (result.status === 'FORBIDDEN') {
+        statusCode = 403;
+      } else if (result.status === 'INVALID') {
+        statusCode = 400;
+      } else if (result.status === 'NOT FOUND') {
+        statusCode = 404;
+      }
+
+      return sendJson(res, statusCode, result);
+    }
+
+    if (pathname === '/api/qr/verify' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      const user = auth.valid ? auth.user : null;
+      const qrData = reqUrl.searchParams.get('qr_data') || reqUrl.searchParams.get('qrData');
+      const tokenId = reqUrl.searchParams.get('tokenId') || reqUrl.searchParams.get('token');
+      const appointmentId = reqUrl.searchParams.get('appointmentId');
+      const action = reqUrl.searchParams.get('action') || 'verify';
+
+      const result = await db.verifyAndCheckInAppointment({
+        qrData,
+        tokenId,
+        appointmentId,
+        action,
+        user,
+      });
+
+      let statusCode = 200;
+      if (result.status === 'FORBIDDEN') statusCode = 403;
+      else if (result.status === 'INVALID') statusCode = 400;
+      else if (result.status === 'NOT FOUND') statusCode = 404;
+
+      return sendJson(res, statusCode, result);
+    }
+
+    // -------------------------------------------------------------
+    // LIVE QUEUE STATUS & REALTIME OPERATIONS
     // -------------------------------------------------------------
     if (pathname === '/api/queue/status' && req.method === 'GET') {
-      const tokenId = reqUrl.searchParams.get('tokenId') || reqUrl.searchParams.get('token') || '#MED-1001';
-      const status = await getQueueStatus(tokenId);
+      const tokenId = reqUrl.searchParams.get('tokenId') || reqUrl.searchParams.get('token') || reqUrl.searchParams.get('appointmentId');
+      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id');
+      const doctorId = reqUrl.searchParams.get('doctorId') || reqUrl.searchParams.get('doctor_id');
+      const status = await getQueueStatus(tokenId, { hospitalId, doctorId });
       return sendJson(res, 200, status);
     }
 
     if (pathname === '/api/queue/entries' && req.method === 'GET') {
-      const hospitalId = reqUrl.searchParams.get('hospitalId');
-      const entries = await getQueueEntries(hospitalId);
-      return sendJson(res, 200, { entries });
+      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id');
+      const doctorId = reqUrl.searchParams.get('doctorId') || reqUrl.searchParams.get('doctor_id');
+      const departmentId = reqUrl.searchParams.get('departmentId') || reqUrl.searchParams.get('department_id');
+      const includeCompleted = reqUrl.searchParams.get('includeCompleted') === 'true';
+      const includeCancelled = reqUrl.searchParams.get('includeCancelled') === 'true';
+
+      const entries = await getQueueEntries({
+        hospitalId,
+        doctorId,
+        departmentId,
+        includeCompleted,
+        includeCancelled,
+      });
+      return sendJson(res, 200, { success: true, count: entries.length, entries });
     }
 
     if (pathname === '/api/queue/call-next' && req.method === 'POST') {
-      const body = await readBody(req);
-      const hospitalId = body.hospitalId;
-      const entries = await getQueueEntries(hospitalId);
-
-      // Advance queue state
-      let foundCalled = false;
-      for (const entry of entries) {
-        if (entry.status === 'IN_CONSULTATION') {
-          entry.status = 'COMPLETED';
-        } else if (entry.status === 'CALLED') {
-          entry.status = 'IN_CONSULTATION';
-        } else if (!foundCalled && entry.status === 'WAITING') {
-          foundCalled = true;
-          entry.status = 'CALLED';
-          entry.position = 0;
+      const auth = await authenticateRequest(req);
+      let staffUser = null;
+      if (auth.valid && auth.user) {
+        const staffRoles = ['hospital', 'receptionist', 'doctor', 'emergency_manager', 'admin'];
+        if (!staffRoles.includes(auth.user.role?.toLowerCase())) {
+          return sendJson(res, 403, {
+            error: 'FORBIDDEN',
+            message: 'Only authorized hospital personnel can advance the OPD queue.',
+          });
         }
+        staffUser = auth.user;
       }
 
-      return sendJson(res, 200, { success: true, entries });
+      const body = await readBody(req);
+      const hospitalId = body.hospitalId || body.hospital_id || staffUser?.hospital_id || staffUser?.id;
+      const doctorId = body.doctorId || body.doctor_id;
+
+      try {
+        const result = await callNextPatient({ hospitalId, doctorId, staffUser });
+        return sendJson(res, 200, result);
+      } catch (err) {
+        console.error('[server] callNextPatient error:', err.message);
+        return sendJson(res, 500, { success: false, error: 'QUEUE_ADVANCE_FAILED', message: err.message });
+      }
+    }
+
+    if (pathname === '/api/queue/update-status' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      let staffUser = null;
+      if (auth.valid && auth.user) {
+        const staffRoles = ['hospital', 'receptionist', 'doctor', 'emergency_manager', 'admin'];
+        if (!staffRoles.includes(auth.user.role?.toLowerCase())) {
+          return sendJson(res, 403, {
+            error: 'FORBIDDEN',
+            message: 'Only authorized hospital personnel can update queue statuses.',
+          });
+        }
+        staffUser = auth.user;
+      }
+
+      const body = await readBody(req);
+      const appointmentId = body.appointmentId || body.appointment_id || body.tokenId || body.token;
+      const status = body.status;
+
+      if (!appointmentId || !status) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'BAD_REQUEST',
+          message: 'Both appointmentId (or tokenId) and status are required.',
+        });
+      }
+
+      try {
+        const result = await advancePatientStatus({ appointmentId, newStatus: status, staffUser });
+        return sendJson(res, 200, result);
+      } catch (err) {
+        console.error('[server] advancePatientStatus error:', err.message);
+        return sendJson(res, 400, { success: false, error: 'STATUS_UPDATE_FAILED', message: err.message });
+      }
+    }
+
+    // -------------------------------------------------------------
+    // EMERGENCY REQUESTS & DISPATCH (Phase 7 Real DB Integration)
+    // -------------------------------------------------------------
+    if (pathname === '/api/emergency/requests' && req.method === 'GET') {
+      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id');
+      const status = reqUrl.searchParams.get('status');
+      const requests = await db.getEmergencyRequests({ hospital_id: hospitalId, status });
+      return sendJson(res, 200, { success: true, count: requests.length, requests });
+    }
+
+    if (pathname === '/api/emergency/request' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      const body = await readBody(req);
+      const hospitalId = body.hospital_id || body.requesting_hospital_id || (auth.valid && auth.user ? auth.user.id : null);
+      if (!hospitalId) {
+        return sendJson(res, 400, { success: false, error: 'MISSING_HOSPITAL_ID', message: 'Hospital ID is required' });
+      }
+
+      const created = await db.createEmergencyRequest({
+        requesting_hospital_id: hospitalId,
+        resource_type: body.resource_type || body.resourceType,
+        quantity: Number(body.quantity) || 1,
+        urgency: body.urgency || body.priority || 'CRITICAL',
+        notes: body.notes,
+      });
+
+      const reqHospName = body.requesting_hospital_name || auth.user?.name || 'Regional Hospital';
+      sendTelegramAlert(
+        `🚨 <b>MedConnect Pulse — Emergency Resource Request</b>\n\n` +
+        `• <b>Hospital:</b> ${reqHospName}\n` +
+        `• <b>Resource:</b> ${body.quantity || 1}x ${body.resource_type || body.resourceType || 'Resource'}\n` +
+        `• <b>Priority:</b> ${body.urgency || body.priority || 'CRITICAL'}\n` +
+        `• <b>Radius:</b> ${body.radius_km || 15} km\n` +
+        `• <b>Status:</b> BROADCASTED TO REGIONAL RADAR NETWORK`
+      ).catch(() => {});
+
+      return sendJson(res, 201, created);
+    }
+
+    if (pathname === '/api/emergency/accept' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      const body = await readBody(req);
+      const requestId = body.request_id || body.requestId;
+      const supplyingHospitalId = body.supplying_hospital_id || body.responding_hospital_id || body.hospital_id || (auth.valid && auth.user ? auth.user.id : null);
+      const supplyingHospitalName = body.supplying_hospital_name || body.responding_hospital_name || auth.user?.name;
+
+      if (!requestId || !supplyingHospitalId) {
+        return sendJson(res, 400, { success: false, error: 'BAD_REQUEST', message: 'Both request_id and supplying_hospital_id are required' });
+      }
+
+      const result = await db.acceptEmergencyRequest({
+        request_id: requestId,
+        supplying_hospital_id: supplyingHospitalId,
+        supplying_hospital_name: supplyingHospitalName,
+      });
+
+      if (result.success) {
+        sendTelegramAlert(
+          `✅ <b>MedConnect Pulse — Emergency Resource Reserved</b>\n\n` +
+          `• <b>Supplying Hospital:</b> ${supplyingHospitalName || 'Facility'}\n` +
+          `• <b>Request ID:</b> <code>${requestId}</code>\n` +
+          `• <b>Dispatch Pass:</b> <code>${result.dispatch_id || 'DISP-ACTIVE'}</code>\n` +
+          `• <b>Status:</b> INVENTORY RESERVED & AMBULANCE DISPATCHED`
+        ).catch(() => {});
+      }
+
+      const statusCode = result.success ? 200 : (result.error === 'INSUFFICIENT_INVENTORY' ? 409 : 400);
+      return sendJson(res, statusCode, result);
+    }
+
+    // -------------------------------------------------------------
+    // HOSPITAL RESOURCES & INVENTORY (Phase 7 Real DB)
+    // -------------------------------------------------------------
+    if ((pathname === '/api/resources' || pathname === '/api/emergency/resources') && req.method === 'GET') {
+      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id');
+      const resources = await db.getHospitalResources(hospitalId);
+      return sendJson(res, 200, { success: true, count: resources.length, resources });
     }
 
     // -------------------------------------------------------------
@@ -332,21 +675,48 @@ const server = http.createServer(async (req, res) => {
     // -------------------------------------------------------------
     // AUTHENTICATION & AUTHORIZATION
     // -------------------------------------------------------------
+    if (pathname === '/api/auth/signup' && req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const result = await signup(body);
+        return sendJson(res, 201, result);
+      } catch (err) {
+        const status = err.statusCode || 400;
+        return sendJson(res, status, {
+          error: err.code || 'SIGNUP_FAILED',
+          message: err.message,
+        });
+      }
+    }
+
     if (pathname === '/api/auth/login' && req.method === 'POST') {
       const body = await readBody(req);
       try {
         const auth = await login(body);
         return sendJson(res, 200, auth);
       } catch (err) {
-        return sendJson(res, 400, { error: 'AUTH_FAILED', message: err.message });
+        const status = err.statusCode || 401;
+        return sendJson(res, status, {
+          error: err.code || 'AUTH_FAILED',
+          message: err.message,
+        });
       }
     }
 
     if (pathname === '/api/auth/me' && req.method === 'GET') {
-      const authHeader = req.headers['authorization'] || '';
-      const token = authHeader.replace(/^Bearer\s+/i, '');
-      const session = await verifySession(token);
-      return sendJson(res, 200, session);
+      const auth = await authenticateRequest(req);
+      if (!auth.valid || !auth.user) {
+        return sendJson(res, 401, {
+          authenticated: false,
+          error: auth.error || 'UNAUTHORIZED',
+          message: 'Session is invalid or expired. Please sign in again.',
+        });
+      }
+      return sendJson(res, 200, { authenticated: true, user: auth.user });
+    }
+
+    if (pathname === '/api/auth/logout' && req.method === 'POST') {
+      return sendJson(res, 200, { success: true, message: 'Session invalidated successfully' });
     }
 
     // -------------------------------------------------------------
@@ -370,6 +740,49 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         return sendJson(res, 504, { error: 'OPENAI_GATEWAY_TIMEOUT', message: err.message });
       }
+    }
+
+    if (pathname.startsWith('/api/n8n/') || pathname.startsWith('/webhook/')) {
+      const webhookPath = pathname.replace(/^\/api\/n8n\//, '').replace(/^\/webhook\//, '');
+      const body = await readBody(req);
+      const secret = process.env.N8N_WEBHOOK_SECRET || process.env.VITE_N8N_WEBHOOK_SECRET || 'medconnect-n8n-secret-key';
+      const n8nBase = (process.env.N8N_WEBHOOK_URL || 'https://test-medconnect.app.n8n.cloud/webhook').replace(/\/$/, '');
+      const targetUrl = `${n8nBase}/${webhookPath}`;
+
+      try {
+        const resp = await fetch(targetUrl, {
+          method: req.method,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-webhook-secret': req.headers['x-webhook-secret'] || secret,
+            'x-medconnect-secret': req.headers['x-medconnect-secret'] || secret,
+            ...(req.headers['x-correlation-id'] ? { 'x-correlation-id': req.headers['x-correlation-id'] } : {}),
+          },
+          body: req.method !== 'GET' && req.method !== 'HEAD' ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (resp.status !== 404) {
+          const data = await resp.json().catch(async () => ({ text: await resp.text().catch(() => '') }));
+          return sendJson(res, resp.status, data);
+        }
+      } catch {
+        // Fall through to local execution if available
+      }
+
+      // If remote n8n returned 404 or failed and this is AI Receptionist, run verified WF1 workflow
+      if (webhookPath === 'ai-receptionist' || webhookPath === 'medconnect-test') {
+        const { executeWf1Local } = await import('./services/n8nService.js');
+        const localExec = executeWf1Local(body, req.headers);
+        if (localExec) {
+          return sendJson(res, localExec.statusCode, localExec.body);
+        }
+      }
+
+      return sendJson(res, 404, {
+        code: 404,
+        message: `The requested webhook "POST ${webhookPath}" is not registered.`,
+      });
     }
 
     if (pathname === '/api/twilio/call' && req.method === 'POST') {

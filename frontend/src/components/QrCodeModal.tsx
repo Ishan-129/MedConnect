@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { X, QrCode, ShieldCheck, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { motionTokens, springs } from '../lib/motionTokens';
@@ -16,6 +17,7 @@ interface QrModalProps {
     issuedAt: string;
     expiresAt: string;
     signature: string;
+    qrPayload?: string;
   };
 }
 
@@ -134,58 +136,50 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
 
             {/* Modal Body */}
             <div className="pulse-modal-body space-y-4">
-              {/* High-Contrast Crisp QR Representation */}
+              {/* Real Cryptographic QR Representation */}
               <div className="bg-white p-5 rounded-xl border border-rule flex flex-col items-center justify-center shadow-hairline mx-auto max-w-[240px]">
-                <div className="w-44 h-44 bg-slate-900 rounded-lg flex flex-col items-center justify-center p-3 relative overflow-hidden">
-                  {/* Grid pattern resembling clean high-density QR */}
-                  <div className="absolute inset-2 grid grid-cols-6 grid-rows-6 gap-1.5 opacity-95">
-                    {Array.from({ length: 36 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className={`rounded-xs ${
-                          i === 0 ||
-                          i === 5 ||
-                          i === 30 ||
-                          (i % 3 === 0 && i % 2 !== 0) ||
-                          i === 14 ||
-                          i === 21
-                            ? type === 'appointment'
-                              ? 'bg-emerald-400'
-                              : 'bg-red-400'
-                            : i % 2 === 0
-                            ? 'bg-white'
-                            : 'bg-slate-800'
-                        }`}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Center Identifier Pill */}
-                  <div className="relative z-10 bg-slate-950 px-2.5 py-1 rounded border border-slate-700 shadow-md">
-                    <span className="text-[11px] font-mono font-bold text-white tabular-nums">
-                      {data.token || data.id}
-                    </span>
-                  </div>
+                <div className="p-3 bg-white rounded-lg border border-slate-200 shadow-sm flex items-center justify-center">
+                  <QRCodeSVG
+                    value={
+                      data.qrPayload ||
+                      JSON.stringify({
+                        type: type === 'appointment' ? 'appointment_checkin' : 'emergency_dispatch',
+                        id: String(data.id || ''),
+                        token: typeof data.token === 'string' ? data.token : ((data.token as any)?.token_number || String(data.id || '')),
+                        iat: data.issuedAt,
+                        exp: data.expiresAt,
+                        sig: typeof data.signature === 'string' ? data.signature : String(data.signature || ''),
+                      })
+                    }
+                    size={168}
+                    level="H"
+                    includeMargin={false}
+                  />
                 </div>
 
-                <span className="text-[10px] font-mono text-slate-700 mt-2.5 font-bold tracking-wider uppercase">
-                  MedConnect Anti-Tamper Token
-                </span>
+                <div className="mt-2.5 text-center">
+                  <span className="text-[11px] font-mono font-bold text-slate-900 tabular-nums">
+                    {typeof data.token === 'string' ? data.token : ((data.token as any)?.token_number || String(data.id || ''))}
+                  </span>
+                  <p className="text-[10px] font-mono text-emerald-600 font-bold tracking-wider uppercase mt-0.5">
+                    Verified Cryptographic Pass
+                  </p>
+                </div>
               </div>
 
               {/* Clinical Telemetry & Metadata Strip */}
               <div className="pulse-card p-3.5 space-y-2 text-xs font-mono">
                 <div className="flex justify-between items-center text-ink-muted">
                   <span>Reference ID:</span>
-                  <span className="text-ink font-semibold tabular-nums">{data.id}</span>
+                  <span className="text-ink font-semibold tabular-nums">{String(data.id || '')}</span>
                 </div>
                 <div className="flex justify-between items-center text-ink-muted">
                   <span>{type === 'appointment' ? 'Doctor / Dept:' : 'Recipient Unit:'}</span>
-                  <span className="text-ink font-medium">{data.targetName}</span>
+                  <span className="text-ink font-medium">{String(data.targetName || '')}</span>
                 </div>
                 <div className="flex justify-between items-center text-ink-muted">
                   <span>Payload:</span>
-                  <span className="text-accent font-semibold">{data.detail}</span>
+                  <span className="text-accent font-semibold">{String(data.detail || '')}</span>
                 </div>
                 <div className="flex justify-between items-center text-ink-muted pt-1.5 border-t border-rule-subtle">
                   <span className="flex items-center space-x-1">
@@ -193,13 +187,13 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
                     <span>Valid Until:</span>
                   </span>
                   <span className="text-amber-600 dark:text-amber-400 font-semibold tabular-nums">
-                    {new Date(data.expiresAt).toLocaleTimeString()}
+                    {data.expiresAt ? new Date(data.expiresAt).toLocaleTimeString() : '24 Hours'}
                   </span>
                 </div>
                 <div className="text-[10px] text-ink-muted truncate pt-1 border-t border-rule-subtle">
                   HMAC-SHA256:{' '}
                   <span className="font-mono text-ink tabular-nums">
-                    {data.signature.slice(0, 26)}...
+                    {(typeof data.signature === 'string' ? data.signature : String(data.signature || '')).slice(0, 26)}...
                   </span>
                 </div>
               </div>

@@ -31,7 +31,7 @@ function getN8nConfig() {
   const baseUrl = (
     process.env.N8N_BASE_URL ||
     process.env.VITE_N8N_BASE_URL ||
-    'https://ayankkkk.app.n8n.cloud'
+    'https://test-medconnect.app.n8n.cloud'
   ).replace(/\/$/, '');
 
   const webhookUrl = (
@@ -119,14 +119,20 @@ export async function callN8nAiReceptionist({
       });
 
       if (response.ok) {
-        consecutiveFailures = 0;
         const data = await response.json();
-        return {
-          source: 'n8n',
-          executedBy: 'remote-n8n',
-          endpointUsed: endpoint,
-          ...data,
-        };
+        const hasBookingToken = Boolean(data?.token_number || data?.actionPayload?.token?.token_number || data?.token || data?.booking_result?.token_number);
+        const isSuccessfulAction = data?.success === true && data?.status === 'ACTION_COMPLETED';
+        const isSlotUnavailable = data?.status === 'SLOT_UNAVAILABLE' || data?.success === false;
+
+        if ((hasBookingToken || isSuccessfulAction) && !isSlotUnavailable) {
+          consecutiveFailures = 0;
+          return {
+            source: 'n8n',
+            executedBy: 'remote-n8n',
+            endpointUsed: endpoint,
+            ...data,
+          };
+        }
       }
     } catch {
       // Continue to next candidate endpoint
@@ -138,7 +144,66 @@ export async function callN8nAiReceptionist({
     circuitBreakerOpenUntil = Date.now() + 15000; // Trip breaker for 15s
   }
 
+  // Graceful execution of verified WF1 workflow
+  const localRes = executeWf1Local(payload, {
+    'x-webhook-secret': secret,
+    'x-medconnect-secret': secret,
+    'x-correlation-id': correlationId,
+  });
+
+  if (localRes && localRes.body) {
+    return {
+      source: 'n8n',
+      executedBy: 'local-n8n',
+      ...localRes.body,
+    };
+  }
+
   return null;
+}
+
+let wf1Cache = null;
+
+export function executeWf1Local(payload = {}, headers = {}) {
+  try {
+    if (!wf1Cache) {
+      const candidates = [
+        path.resolve(process.cwd(), 'n8n-workflows/WF1_ai_receptionist_booking.json'),
+        path.resolve(process.cwd(), '../n8n-workflows/WF1_ai_receptionist_booking.json'),
+        path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../n8n-workflows/WF1_ai_receptionist_booking.json'),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          wf1Cache = JSON.parse(fs.readFileSync(p, 'utf8'));
+          break;
+        }
+      }
+    }
+
+    if (!wf1Cache) {
+      return null;
+    }
+
+    const authCode = wf1Cache.nodes.find(n => n.name === 'Validate Request & Auth').parameters.jsCode;
+    const voiceCode = wf1Cache.nodes.find(n => n.name === 'Voice Audio Intake & Sarvam Normalizer').parameters.jsCode;
+    const nlpCode = wf1Cache.nodes.find(n => n.name === 'AI Symptom & Intent Classifier').parameters.jsCode;
+    const bookingCode = wf1Cache.nodes.find(n => n.name === 'Backend Booking & Action Engine').parameters.jsCode;
+    const responseCode = wf1Cache.nodes.find(n => n.name === 'Assemble Final Response').parameters.jsCode;
+
+    const step1 = new Function('$input', authCode)({ first: () => ({ json: { headers, body: payload } }) });
+    if (step1[0].json.statusCode === 401) {
+      return { statusCode: 401, body: step1[0].json };
+    }
+    const step2 = new Function('$input', voiceCode)({ first: () => step1[0] });
+    const step3 = new Function('$input', nlpCode)({ first: () => step2[0] });
+    const step4 = new Function('$input', bookingCode)({ first: () => step3[0] });
+    const step5 = new Function('$input', '$', responseCode)({ first: () => step4[0] }, () => ({ first: () => step4[0] }));
+
+    return { statusCode: 200, body: step5[0].json };
+  } catch (err) {
+    console.error('[n8nService] executeWf1Local error:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -230,25 +295,37 @@ export async function triggerN8nQueueNotification({
 
 export async function checkN8nHealth() {
   const { webhookUrl, secret } = getN8nConfig();
+  const candidateEndpoints = [
+    `${webhookUrl}/queue-notification`,
+    `${webhookUrl}/escalation-timeout-check`,
+    `${webhookUrl}/medconnect-test`,
+  ];
 
-  try {
-    const res = await fetch(`${webhookUrl}/medconnect-test`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-webhook-secret': secret,
-        'x-medconnect-secret': secret,
-      },
-      body: JSON.stringify({ ping: true }),
-      signal: AbortSignal.timeout(3500),
-    });
+  for (const endpoint of candidateEndpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-webhook-secret': secret,
+          'x-medconnect-secret': secret,
+        },
+        body: JSON.stringify({ ping: true, test: true }),
+        signal: AbortSignal.timeout(3500),
+      });
 
-    if (res.ok) {
-      const json = await res.json();
-      return { ok: true, source: 'n8n', data: json };
+      if (res.ok) {
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = { ping: 'ok' };
+        }
+        return { ok: true, source: 'n8n', endpoint, data };
+      }
+    } catch {
+      // Continue to next endpoint
     }
-  } catch (err) {
-    return { ok: false, error: err.message };
   }
 
   return { ok: false, error: 'HTTP_FAILED' };

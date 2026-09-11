@@ -26,7 +26,16 @@ export type ResourceType =
   | 'B_POS_BLOOD' 
   | 'AB_NEG_BLOOD' 
   | 'AB_POS_BLOOD' 
+  | 'BLOOD_O_NEG'
+  | 'BLOOD_O_POS'
+  | 'BLOOD_A_NEG'
+  | 'BLOOD_A_POS'
+  | 'BLOOD_B_NEG'
+  | 'BLOOD_B_POS'
+  | 'BLOOD_AB_NEG'
+  | 'BLOOD_AB_POS'
   | 'OXYGEN' 
+  | 'OXYGEN_CYLINDER'
   | 'ICU_BED' 
   | 'VENTILATOR' 
   | 'MEDICINE' 
@@ -58,6 +67,8 @@ export interface Doctor {
   specialty: string;
   specialization?: string; // Backend column alias for specialty
   available_today: boolean;
+  room_number?: string;
+  consultation_fee?: number;
 }
 
 export interface DoctorSlot {
@@ -97,18 +108,24 @@ export interface QueueEntry {
   check_in_at: string;
   status: QueueStatus;
   estimated_wait_mins?: number;
+  patient_phone?: string;
+  hospital_name?: string;
 }
 
 export interface EmergencyRequest {
+  id?: string;
   request_id: string;
   requesting_hospital_id: string;
   requesting_hospital_name: string;
   resource_type: ResourceType;
   quantity: number;
   priority: EmergencyPriority;
+  urgency?: string;
+  notes?: string;
   status: EmergencyStatus;
   created_at: string;
   expires_at: string;
+  timeout_at?: string;
   supplying_hospital_id?: string;
   supplying_hospital_name?: string;
   dispatch_id?: string;

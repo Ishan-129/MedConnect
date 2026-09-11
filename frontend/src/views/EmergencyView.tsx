@@ -1,5 +1,4 @@
-/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Radio,
   AlertTriangle,
@@ -23,7 +22,7 @@ import {
   PhoneCall
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { INITIAL_HOSPITALS, AIIMS_COORDS } from '../lib/mockData';
+import { supabase } from '../lib/supabaseClient';
 import { Hospital, EmergencyRequest, ResourceType, EmergencyPriority } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import { TransportationMap } from '../components/TransportationMap';
@@ -35,6 +34,19 @@ import { initiateTwilioVoiceCall } from '../services/twilioService';
 import { springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
 import { calculateDistanceKm } from '../lib/haversine';
+
+const AIIMS_COORDS = { lat: 28.5672, lng: 77.2100 };
+const DEFAULT_FALLBACK_HOSPITAL: Hospital = {
+  hospital_id: '11111111-1111-4111-a111-111111111111',
+  name: 'All India Institute of Medical Sciences (AIIMS) New Delhi',
+  latitude: 28.5672,
+  longitude: 77.21,
+  contact: '+91-11-26588500',
+  telegram_chat_id: '6537122486',
+  active_status: true,
+  supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
+  distance_km: 0,
+};
 
 export const EmergencyView: React.FC = () => {
   const { activeHospital: authHospital, allHospitals, switchHospital, openAuthModal } = useAuth();
@@ -71,7 +83,7 @@ export const EmergencyView: React.FC = () => {
         distance_km: 0,
       };
     }
-    return hospitals[0] || INITIAL_HOSPITALS[0];
+    return hospitals[0] || DEFAULT_FALLBACK_HOSPITAL;
   }, [authHospital, hospitals]);
 
   // Feed tabs: 'incoming' (alerts from other hospitals), 'outgoing' (sent by you), 'all'
@@ -80,20 +92,10 @@ export const EmergencyView: React.FC = () => {
   // View Mode: 'map' (Transportation Map) vs 'radar' (15km Haversine Radar)
   const [mapMode, setMapMode] = useState<'map' | 'radar'>('map');
 
-  // Requests stream
-  const [requests, setRequests] = useState<EmergencyRequest[]>([
-    {
-      request_id: '4a123f00-8888-4000-a000-000000000001',
-      requesting_hospital_id: '11111111-1111-4111-a111-111111111111',
-      requesting_hospital_name: 'AIIMS New Delhi (Main Campus)',
-      resource_type: 'O_NEG_BLOOD',
-      quantity: 4,
-      priority: 'CRITICAL',
-      status: 'OPEN',
-      created_at: new Date(Date.now() - 35 * 1000).toISOString(),
-      expires_at: new Date(Date.now() + 145 * 1000).toISOString(),
-    }
-  ]);
+  // Real database emergency requests stream
+  const [requests, setRequests] = useState<EmergencyRequest[]>([]);
+  const [hospitalResources, setHospitalResources] = useState<any[]>([]);
+  const [isLoadingRequests, setIsLoadingRequests] = useState(true);
 
   // Active Ambulance Mission State
   const [activeMission, setActiveMission] = useState<{
@@ -137,6 +139,67 @@ export const EmergencyView: React.FC = () => {
   }>({ isOpen: false, type: 'PICKUP' });
 
   const [isEscalating, setIsEscalating] = useState(false);
+
+  // Load real emergency requests from database
+  const loadLiveEmergencyRequests = useCallback(async () => {
+    try {
+      const res = await fetch('/api/emergency/requests');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.requests) {
+          setRequests(data.requests);
+        }
+      }
+    } catch (e) {
+      console.warn('[EmergencyView] Error loading requests:', e);
+    } finally {
+      setIsLoadingRequests(false);
+    }
+  }, []);
+
+  // Load hospital inventory resources from database
+  const loadHospitalResources = useCallback(async () => {
+    if (!activeHospital?.hospital_id) return;
+    try {
+      const res = await fetch(`/api/resources?hospitalId=${activeHospital.hospital_id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.resources) {
+          setHospitalResources(data.resources);
+        }
+      }
+    } catch (e) {
+      console.warn('[EmergencyView] Error loading resources:', e);
+    }
+  }, [activeHospital?.hospital_id]);
+
+  // Initial load, periodic polling, and Supabase Realtime subscription
+  useEffect(() => {
+    loadLiveEmergencyRequests();
+    loadHospitalResources();
+
+    const interval = setInterval(() => {
+      loadLiveEmergencyRequests();
+      loadHospitalResources();
+    }, 6000);
+
+    const channel = supabase
+      .channel('emergency-requests-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'emergency_requests' },
+        () => {
+          loadLiveEmergencyRequests();
+          loadHospitalResources();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [loadLiveEmergencyRequests, loadHospitalResources]);
 
   // Ticking countdown
   useEffect(() => {
@@ -201,19 +264,12 @@ export const EmergencyView: React.FC = () => {
     }
   };
 
-  // Handler: Hospital A triggers 15km SOS Broadcast (calling live n8n WF08)
+  // Handler: Hospital A triggers 15km SOS Broadcast (persisting to Real DB + live n8n WF08)
   const handleBroadcastSOS = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsBroadcasting(true);
 
-    const generatedReqId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
-
     const payload = {
-      request_id: generatedReqId,
       hospital_id: activeHospital.hospital_id,
       requesting_hospital_name: activeHospital.name,
       resource_type: resourceType,
@@ -227,32 +283,47 @@ export const EmergencyView: React.FC = () => {
     };
 
     try {
-      const res = await triggerEmergencyBroadcast(payload);
+      // 1. Persist to real Supabase database
+      const dbRes = await fetch('/api/emergency/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-      const newReq: EmergencyRequest = {
-        request_id: generatedReqId,
+      const dbData = await dbRes.json();
+      const savedReq = dbData.request || {
+        request_id: dbData.id || `REQ-${Date.now()}`,
+        id: dbData.id,
         requesting_hospital_id: activeHospital.hospital_id,
         requesting_hospital_name: activeHospital.name,
         resource_type: resourceType as any,
         quantity: quantity,
         priority: priority,
-        status: 'OPEN',
+        status: 'CREATED',
         created_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 180 * 1000).toISOString(),
       };
 
-      setRequests([newReq, ...requests]);
+      setRequests((prev) => [savedReq, ...prev.filter(r => (r.request_id || r.id) !== (savedReq.request_id || savedReq.id))]);
       setCountdown(180);
 
-      setLastN8nLog({
-        action: 'WF08 | EMERGENCY BROADCAST',
-        correlationId: res.correlation_id || generateCorrelationId(),
-        status: res.success ? 'SUCCESS (HTTP 200)' : `ERROR (${res.status})`,
-        time: new Date().toLocaleTimeString(),
-        detail: res.success
-          ? `Broadcasted to ${res.hospitals_notified || 4} regional hospitals via n8n & Telegram.`
-          : `n8n webhook error: ${res.message || res.error}`,
-      });
+      // 2. Trigger n8n regional broadcast in parallel
+      triggerEmergencyBroadcast({
+        ...payload,
+        request_id: savedReq.request_id || savedReq.id,
+      }).then((n8nRes) => {
+        setLastN8nLog({
+          action: 'WF08 | EMERGENCY BROADCAST',
+          correlationId: n8nRes.correlation_id || generateCorrelationId(),
+          status: n8nRes.success ? 'SUCCESS (HTTP 200)' : `ERROR (${n8nRes.status})`,
+          time: new Date().toLocaleTimeString(),
+          detail: n8nRes.success
+            ? `Broadcasted to regional hospitals via n8n & Telegram.`
+            : `n8n webhook error: ${n8nRes.message || n8nRes.error}`,
+        });
+      }).catch(() => {});
+
+      loadHospitalResources();
     } catch (err: any) {
       console.error('Error during broadcast:', err);
     } finally {
@@ -260,8 +331,13 @@ export const EmergencyView: React.FC = () => {
     }
   };
 
-  // Handler: Nearby hospital accepts request (calling live n8n WF09)
+  // Handler: Nearby hospital accepts request (persisting to Real DB + live n8n WF09)
   const handleAcceptRequest = async (req: EmergencyRequest, supplyingHosp: Hospital) => {
+    const reqId = req.request_id || req.id || '';
+    if (!reqId) {
+      alert('Operational Error: Emergency request ID is missing.');
+      return;
+    }
     // Strict Guard: Requesting hospital CANNOT accept its own requisition!
     if (req.requesting_hospital_id === supplyingHosp.hospital_id) {
       alert("Operational Guard: A requesting hospital cannot supply its own emergency request! Only nearby candidate facilities can accept.");
@@ -270,22 +346,31 @@ export const EmergencyView: React.FC = () => {
 
     setIsAccepting(true);
 
-    const payload = {
-      request_id: req.request_id,
-      responding_hospital_id: supplyingHosp.hospital_id,
-      responding_hospital_name: supplyingHosp.name,
-    };
-
     try {
-      const res = await triggerEmergencyAccept(payload);
+      // 1. Atomically accept in database & lock inventory
+      const acceptRes = await fetch('/api/emergency/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request_id: reqId,
+          supplying_hospital_id: supplyingHosp.hospital_id,
+          supplying_hospital_name: supplyingHosp.name,
+        }),
+      });
 
-      const dispatchId = res.dispatch_id || `DISP-${Math.floor(100000 + Math.random() * 900000)}`;
-      const qrHash = res.qr_token_hash || `PASS-TOKEN-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      const acceptData = await acceptRes.json();
+      if (!acceptRes.ok || !acceptData.success) {
+        alert(`Cannot accept request: ${acceptData.message || acceptData.error || 'Conflict occurred'}`);
+        return;
+      }
+
+      const dispatchId = acceptData.dispatch_id || `DISP-${Math.floor(100000 + Math.random() * 900000)}`;
+      const qrHash = acceptData.qr_token_hash || `PASS-TOKEN-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 
       // Update request in list
       setRequests((prev) =>
         prev.map((r) =>
-          r.request_id === req.request_id
+          (r.request_id === reqId || r.id === reqId)
             ? {
                 ...r,
                 status: 'ACCEPTED',
@@ -302,7 +387,7 @@ export const EmergencyView: React.FC = () => {
 
       // Setup Active Mission for Transportation Map
       const missionData = {
-        requestId: req.request_id,
+        requestId: reqId,
         donorHospital: supplyingHosp,
         requesterHospital: reqHosp,
         resourceType: req.resource_type,
@@ -316,12 +401,13 @@ export const EmergencyView: React.FC = () => {
       // Prepare QR Pass Data and Open Pass Modal
       const passObj = {
         dispatch_id: dispatchId,
-        request_id: req.request_id,
+        request_id: reqId,
         donor_hospital_name: supplyingHosp.name,
         requester_hospital_name: reqHosp.name,
         resource_type: req.resource_type,
         quantity: req.quantity,
         qr_token_hash: qrHash,
+        qr_code: acceptData.qr_code,
         issued_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         status: 'ACTIVE',
@@ -329,15 +415,26 @@ export const EmergencyView: React.FC = () => {
       setQrPassData(passObj);
       setShowQRModal(true);
 
-      setLastN8nLog({
-        action: 'WF09 | EMERGENCY ACCEPTANCE',
-        correlationId: res.correlation_id || generateCorrelationId(),
-        status: res.success ? 'SUCCESS (HTTP 200 · RESOURCE LOCKED)' : `ERROR (${res.status})`,
-        time: new Date().toLocaleTimeString(),
-        detail: res.success
-          ? `Resource atomically locked by ${supplyingHosp.name}. QR Dispatch Pass generated.`
-          : `Conflict/Error: ${res.message || res.error}`,
-      });
+      // Refresh inventory and live requests from DB
+      loadHospitalResources();
+      loadLiveEmergencyRequests();
+
+      // 2. Call n8n acceptance webhook in background
+      triggerEmergencyAccept({
+        request_id: reqId,
+        responding_hospital_id: supplyingHosp.hospital_id,
+        responding_hospital_name: supplyingHosp.name,
+      }).then((res) => {
+        setLastN8nLog({
+          action: 'WF09 | EMERGENCY ACCEPTANCE',
+          correlationId: res.correlation_id || generateCorrelationId(),
+          status: res.success ? 'SUCCESS (HTTP 200 · RESOURCE LOCKED)' : `ERROR (${res.status})`,
+          time: new Date().toLocaleTimeString(),
+          detail: res.success
+            ? `Resource atomically locked by ${supplyingHosp.name}. QR Dispatch Pass generated.`
+            : `Conflict/Error: ${res.message || res.error}`,
+        });
+      }).catch(() => {});
     } catch (err: any) {
       console.error('Acceptance error:', err);
     } finally {
@@ -528,8 +625,8 @@ export const EmergencyView: React.FC = () => {
           {/* Active View Container */}
           {mapMode === 'map' ? (
             <TransportationMap
-              requesterHospital={INITIAL_HOSPITALS[0]} // AIIMS
-              donorHospital={activeMission?.donorHospital || (requests[0]?.supplying_hospital_id ? INITIAL_HOSPITALS[1] : null)}
+              requesterHospital={hospitals.find(h => h.hospital_id === requests[0]?.requesting_hospital_id) || activeHospital || hospitals[0]}
+              donorHospital={activeMission?.donorHospital || hospitals.find(h => h.hospital_id === requests[0]?.supplying_hospital_id) || null}
               allHospitals={hospitals}
               activeRequest={requests[0]}
               deliveryStatus={activeMission?.deliveryStatus || 'PENDING'}
@@ -1008,12 +1105,12 @@ export const EmergencyView: React.FC = () => {
                   <td className="font-semibold text-ink">
                     <div className="flex items-center space-x-2">
                       <span>{hosp.name}</span>
-                      {hosp.hospital_id === INITIAL_HOSPITALS[0].hospital_id && (
+                      {hosp.hospital_id === hospitals[0]?.hospital_id && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 font-mono">
                           Hospital A
                         </span>
                       )}
-                      {hosp.hospital_id === INITIAL_HOSPITALS[1].hospital_id && (
+                      {hosp.hospital_id === hospitals[1]?.hospital_id && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 font-mono">
                           Hospital B
                         </span>

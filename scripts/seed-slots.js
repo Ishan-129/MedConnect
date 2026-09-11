@@ -42,47 +42,11 @@ async function seedDoctorsAndSlots() {
     console.error('Failed to fetch hospitals:', hospErr);
     return;
   }
-  const defaultHospital = hospitals.find(h => h.name.includes('Yashoda')) || hospitals[0];
-  console.log(`Using Hospital: ${defaultHospital.name} (${defaultHospital.id})`);
+  const targetHospitals = hospitals.filter(h => h.name.includes('AIIMS') || h.name.includes('Safdarjung') || h.name.includes('Max') || h.name.includes('Fortis') || h.name.includes('Apollo'));
+  console.log(`Targeting ${targetHospitals.length} core hospital centers for slots.`);
 
-  const { data: departments } = await supabase.from('departments').select('*').eq('hospital_id', defaultHospital.id);
-  console.log(`Found ${departments?.length || 0} departments`);
-
-  // Ensure doctors exist for General Medicine and Pediatrics if missing
-  const genMedDept = departments?.find(d => d.name.toLowerCase().includes('general'));
-  const orthoDept = departments?.find(d => d.name.toLowerCase().includes('ortho'));
-  const cardioDept = departments?.find(d => d.name.toLowerCase().includes('cardio'));
-  const pediaDept = departments?.find(d => d.name.toLowerCase().includes('pedia'));
-
-  const { data: existingDoctors } = await supabase.from('doctors').select('*').eq('hospital_id', defaultHospital.id);
-  console.log(`Found ${existingDoctors?.length || 0} existing doctors in DB`);
-
-  if (genMedDept && !existingDoctors?.some(d => d.department_id === genMedDept.id)) {
-    console.log('Seeding Dr. Priya Nair into General Medicine...');
-    await supabase.from('doctors').insert([{
-      hospital_id: defaultHospital.id,
-      department_id: genMedDept.id,
-      name: 'Dr. Priya Nair',
-      specialization: 'Senior Consultant Physician, MBBS, MD (General Medicine)',
-      room_number: 'OPD 101',
-      is_active: true
-    }]);
-  }
-
-  if (pediaDept && !existingDoctors?.some(d => d.department_id === pediaDept.id)) {
-    console.log('Seeding Dr. Vikramaditya Rao into Pediatrics...');
-    await supabase.from('doctors').insert([{
-      hospital_id: defaultHospital.id,
-      department_id: pediaDept.id,
-      name: 'Dr. Vikramaditya Rao',
-      specialization: 'Pediatric Specialist & Neonatologist, MD',
-      room_number: 'OPD 305',
-      is_active: true
-    }]);
-  }
-
-  // Fetch updated list of active doctors
-  const { data: allDoctors } = await supabase.from('doctors').select('*').eq('hospital_id', defaultHospital.id).eq('is_active', true);
+  // Fetch updated list of active doctors across all hospitals
+  const { data: allDoctors } = await supabase.from('doctors').select('*').eq('is_active', true);
   console.log(`Active doctors ready for slots: ${allDoctors?.length || 0}`);
 
   // Ensure slots exist for today through next 14 days
@@ -120,7 +84,7 @@ async function seedDoctorsAndSlots() {
 
       if (missingBlocks.length > 0) {
         const slotsToInsert = missingBlocks.map(tb => ({
-          hospital_id: defaultHospital.id,
+          hospital_id: doc.hospital_id,
           department_id: doc.department_id,
           doctor_id: doc.id,
           doctor_name: doc.name,

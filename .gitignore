@@ -7,7 +7,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 plugins
-ref
+medconnect-main
 # Diagnostic / IDE / OS
 node_modules
 dist
@@ -35,4 +35,3 @@ Thumbs.db
 .cache
 .hallmark/
 coverage
-/medconnect-main

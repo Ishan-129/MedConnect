@@ -147,8 +147,8 @@ export const AuthModal: React.FC = () => {
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!hospName.trim() || !hospPhone.trim()) {
-      setErrorMsg('Facility Name and Emergency Contact Phone are required.');
+    if (!hospName.trim() || !hospPhone.trim() || !hospEmail.trim() || !hospPass.trim()) {
+      setErrorMsg('Facility Name, Emergency Desk Phone, Email, and Password (min 6 characters) are required.');
       return;
     }
 
@@ -162,6 +162,7 @@ export const AuthModal: React.FC = () => {
       address: hospAddress || 'National Capital Region, Delhi',
       contact_email: hospEmail,
       contact_person: hospContactPerson,
+      password: hospPass,
       supported_resources: hospResources,
     });
     setIsLoading(false);
@@ -191,7 +192,7 @@ export const AuthModal: React.FC = () => {
         closeAuthModal();
       }, 700);
     } else {
-      setErrorMsg(res.message || 'Patient phone number not recognized.');
+      setErrorMsg(res.message || 'Patient phone number or password invalid.');
     }
   };
 
@@ -200,8 +201,8 @@ export const AuthModal: React.FC = () => {
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!patName.trim() || !patPhone.trim()) {
-      setErrorMsg('Full Patient Name and Mobile Number are required.');
+    if (!patName.trim() || !patPhone.trim() || !patEmail.trim() || !patPass.trim()) {
+      setErrorMsg('Full Patient Name, Mobile Number, Email, and Password (min 6 characters) are required.');
       return;
     }
 
@@ -210,6 +211,7 @@ export const AuthModal: React.FC = () => {
       name: patName,
       phone: patPhone,
       email: patEmail,
+      password: patPass,
       blood_group: patBloodGroup,
       age: patAge,
       gender: patGender,
@@ -378,10 +380,18 @@ export const AuthModal: React.FC = () => {
                         <button
                           key={h.hospital_id}
                           type="button"
-                          onClick={() => {
-                            switchHospital(h.hospital_id);
-                            setSuccessMsg(`Switched to active desk: ${h.name.split(' ')[0]}`);
-                            setTimeout(closeAuthModal, 600);
+                          onClick={async () => {
+                            setIsLoading(true);
+                            setErrorMsg(null);
+                            const email = h.contact_email || (h.name.toLowerCase().includes('safdarjung') ? 'safdarjung@hospital.gov.in' : 'aiims@hospital.gov.in');
+                            const res = await loginHospital(email, 'medconnect123');
+                            setIsLoading(false);
+                            if (res.success) {
+                              setSuccessMsg(`Authenticated as ${h.name.split(' ')[0]}`);
+                              setTimeout(closeAuthModal, 600);
+                            } else {
+                              setErrorMsg(res.message || 'Authentication failed');
+                            }
                           }}
                           className={`p-2 rounded-lg text-left font-mono text-xs border transition-all flex items-center justify-between ${
                             activeHospital?.hospital_id === h.hospital_id
@@ -465,6 +475,39 @@ export const AuthModal: React.FC = () => {
                         placeholder="e.g. Holy Family Hospital Trauma Wing"
                         className="pulse-input pl-9 text-xs font-semibold"
                       />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="pulse-form-group">
+                      <label className="pulse-label">Official Email Address *</label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 absolute left-3 top-3 text-ink-muted" />
+                        <input
+                          type="email"
+                          required
+                          value={hospEmail}
+                          onChange={(e) => setHospEmail(e.target.value)}
+                          placeholder="desk@hospital.gov.in"
+                          className="pulse-input pl-9 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pulse-form-group">
+                      <label className="pulse-label">Desk Security Password *</label>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 absolute left-3 top-3 text-ink-muted" />
+                        <input
+                          type="password"
+                          required
+                          minLength={6}
+                          value={hospPass}
+                          onChange={(e) => setHospPass(e.target.value)}
+                          placeholder="Min 6 characters"
+                          className="pulse-input pl-9 font-mono text-xs"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -614,10 +657,17 @@ export const AuthModal: React.FC = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          loginPatient('+91 98765 43210');
-                          setSuccessMsg('Logged in as Ananya Deshmukh (Blood O-)');
-                          setTimeout(closeAuthModal, 600);
+                        onClick={async () => {
+                          setIsLoading(true);
+                          setErrorMsg(null);
+                          const res = await loginPatient('ananya@patient.medconnect.org', 'patient123');
+                          setIsLoading(false);
+                          if (res.success) {
+                            setSuccessMsg('Logged in as Ananya Deshmukh (Blood O-)');
+                            setTimeout(closeAuthModal, 600);
+                          } else {
+                            setErrorMsg(res.message || 'Login failed');
+                          }
                         }}
                         className={`p-2 rounded-lg text-left font-mono text-xs border transition-all flex items-center justify-between ${
                           activePatient?.phone === '+91 98765 43210'
@@ -627,7 +677,7 @@ export const AuthModal: React.FC = () => {
                       >
                         <div>
                           <div className="font-bold">Ananya Deshmukh</div>
-                          <div className="text-[10px] text-ink-muted">Blood O- · +91 98765 43210</div>
+                          <div className="text-[10px] text-ink-muted">Blood O- · ananya@patient.medconnect.org</div>
                         </div>
                         {activePatient?.phone === '+91 98765 43210' && (
                           <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0 ml-1" />
@@ -636,10 +686,17 @@ export const AuthModal: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={() => {
-                          loginPatient('+91 98111 22334');
-                          setSuccessMsg('Logged in as Rohan Verma (Blood B+)');
-                          setTimeout(closeAuthModal, 600);
+                        onClick={async () => {
+                          setIsLoading(true);
+                          setErrorMsg(null);
+                          const res = await loginPatient('rohan@patient.medconnect.org', 'patient123');
+                          setIsLoading(false);
+                          if (res.success) {
+                            setSuccessMsg('Logged in as Rohan Verma (Blood B+)');
+                            setTimeout(closeAuthModal, 600);
+                          } else {
+                            setErrorMsg(res.message || 'Login failed');
+                          }
                         }}
                         className={`p-2 rounded-lg text-left font-mono text-xs border transition-all flex items-center justify-between ${
                           activePatient?.phone === '+91 98111 22334'
@@ -649,7 +706,7 @@ export const AuthModal: React.FC = () => {
                       >
                         <div>
                           <div className="font-bold">Rohan Verma</div>
-                          <div className="text-[10px] text-ink-muted">Blood B+ · +91 98111 22334</div>
+                          <div className="text-[10px] text-ink-muted">Blood B+ · rohan@patient.medconnect.org</div>
                         </div>
                         {activePatient?.phone === '+91 98111 22334' && (
                           <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0 ml-1" />
@@ -720,6 +777,39 @@ export const AuthModal: React.FC = () => {
                         placeholder="e.g. Priya Sharma"
                         className="pulse-input pl-9 text-xs font-semibold"
                       />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="pulse-form-group">
+                      <label className="pulse-label">Email Address *</label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 absolute left-3 top-3 text-ink-muted" />
+                        <input
+                          type="email"
+                          required
+                          value={patEmail}
+                          onChange={(e) => setPatEmail(e.target.value)}
+                          placeholder="priya@example.com"
+                          className="pulse-input pl-9 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pulse-form-group">
+                      <label className="pulse-label">Account Password *</label>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 absolute left-3 top-3 text-ink-muted" />
+                        <input
+                          type="password"
+                          required
+                          minLength={6}
+                          value={patPass}
+                          onChange={(e) => setPatPass(e.target.value)}
+                          placeholder="Min 6 characters"
+                          className="pulse-input pl-9 font-mono text-xs"
+                        />
+                      </div>
                     </div>
                   </div>
 

@@ -453,6 +453,7 @@ export async function verifySarvamConnection(customApiKey) {
     if (response.status === 400 || response.status === 200) {
       return {
         success: true,
+        configured: true,
         status: 'CONNECTED',
         message: 'Sarvam AI Speech API connection verified successfully.',
       };

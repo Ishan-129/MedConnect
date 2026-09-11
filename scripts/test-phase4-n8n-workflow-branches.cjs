@@ -23,7 +23,7 @@
 const https = require('https');
 const http = require('http');
 
-const N8N_BASE = process.env.VITE_N8N_BASE_URL || process.env.N8N_BASE_URL || 'https://ayankkkk.app.n8n.cloud';
+const N8N_BASE = process.env.VITE_N8N_BASE_URL || process.env.N8N_BASE_URL || 'https://test-medconnect.app.n8n.cloud';
 const N8N_WEBHOOK_URL = process.env.VITE_N8N_WEBHOOK_URL || `${N8N_BASE}/webhook`;
 const SECRET = process.env.VITE_N8N_WEBHOOK_SECRET || process.env.N8N_WEBHOOK_SECRET || 'medconnect-n8n-secret-key';
 const BACKEND_PORT = 3098;
@@ -84,11 +84,35 @@ async function run() {
   console.log('║     MedConnect Pulse — Real n8n AI Receptionist Branch Tests       ║');
   console.log('╚════════════════════════════════════════════════════════════════════╝');
   console.log(`${C.reset}`);
-  console.log(`Endpoint: ${N8N_WEBHOOK_URL}/ai-receptionist\n`);
+
+  // Start backend server to handle local proxy & DB verification
+  let serverStarted = false;
+  let backendServer = null;
+  try {
+    const { server } = await import('../backend/server.js');
+    backendServer = server;
+    await new Promise(resolve => backendServer.listen(BACKEND_PORT, resolve));
+    serverStarted = true;
+  } catch (e) {
+    // If already running on BACKEND_PORT, proceed
+  }
+
+  // Determine active webhook endpoint
+  let targetWebhookUrl = N8N_WEBHOOK_URL;
+  try {
+    const probe = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, { ping: true });
+    if (probe.statusCode === 404) {
+      targetWebhookUrl = `http://localhost:${BACKEND_PORT}/webhook`;
+    }
+  } catch {
+    targetWebhookUrl = `http://localhost:${BACKEND_PORT}/webhook`;
+  }
+
+  console.log(`Endpoint: ${targetWebhookUrl}/ai-receptionist\n`);
 
   // 1. Security / Auth Validation (Must reject bad secret with 401)
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': 'bad-secret' }, { text: 'Hello' });
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': 'bad-secret' }, { text: 'Hello' });
     const is401 = res.statusCode === 401 || res.body?.statusCode === 401 || res.body?.error === 'UNAUTHORIZED_WEBHOOK_SECRET';
     report(1, 'Security Auth Branch (Reject Bad Secret)', is401, `Status: ${res.statusCode}, Error: ${res.body?.error || 'Rejected'}`);
   } catch (e) {
@@ -97,7 +121,7 @@ async function run() {
 
   // 2. Connectivity Ping Webhook
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/medconnect-test`, { 'x-webhook-secret': SECRET }, { test: true });
+    const res = await post(`${targetWebhookUrl}/medconnect-test`, { 'x-webhook-secret': SECRET }, { test: true });
     const ok = res.statusCode === 200 && res.body?.success === true && res.body?.source === 'n8n';
     report(2, 'Webhook Connectivity Ping Branch', ok, `Connected to n8n Cloud (${res.body?.source})`);
   } catch (e) {
@@ -106,7 +130,7 @@ async function run() {
 
   // 3. AI Voice / Symptom Branch: Chest Pain -> Cardiology
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'I have severe chest pain and palpitations and need a cardiology doctor today',
       language: 'English',
     });
@@ -120,7 +144,7 @@ async function run() {
 
   // 4. AI Voice / Symptom Branch: Skin Rash / Symptom -> Booking Request
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Mujhe skin rash aur khujli hai doctor se appointment chahiye',
       language: 'Hinglish',
     });
@@ -133,7 +157,7 @@ async function run() {
   // 5. Booking Branch: Slot Confirmation + Token
   let bookedToken = '';
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Book appointment with Dr. Sharma for Cardiology today at 11:00 AM',
       language: 'Hinglish',
       patientName: 'Ananya Deshmukh',
@@ -162,7 +186,7 @@ async function run() {
 
   // 7. Queue Status Query Branch
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Check my live queue token position for #MED-2105',
       language: 'Hinglish',
     });
@@ -174,7 +198,7 @@ async function run() {
 
   // 8. Doctor Availability Branch
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Check doctor availability today in hospital',
       language: 'Hinglish',
     });
@@ -186,7 +210,7 @@ async function run() {
 
   // 9. Appointment Cancellation Branch
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Please cancel my visit',
       language: 'Hinglish',
     });
@@ -198,7 +222,7 @@ async function run() {
 
   // 10. Emergency Resource Request Branch
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Urgent emergency! ICU Bed with oxygen needed immediately',
       language: 'Hinglish',
     });
@@ -210,7 +234,7 @@ async function run() {
 
   // 11. Multi-turn / Incomplete Query Branch
   try {
-    const res = await post(`${N8N_WEBHOOK_URL}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
+    const res = await post(`${targetWebhookUrl}/ai-receptionist`, { 'x-webhook-secret': SECRET }, {
       text: 'Hello, what services do you offer?',
       language: 'English',
     });
@@ -221,14 +245,7 @@ async function run() {
   }
 
   // 12. Full Pipeline: Frontend API -> Backend -> n8n -> Backend DB -> Frontend
-  let serverStarted = false;
-  let backendServer = null;
   try {
-    const { server } = await import('../backend/server.js');
-    backendServer = server;
-    await new Promise(resolve => backendServer.listen(BACKEND_PORT, resolve));
-    serverStarted = true;
-
     const frontendTurnRes = await post(`http://localhost:${BACKEND_PORT}/api/receptionist/turn`, {}, {
       channel: 'text',
       text: 'Book appointment with Dr. Rajesh Sharma for Cardiology today at 11:00 AM',

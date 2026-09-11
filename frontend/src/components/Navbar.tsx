@@ -1,5 +1,5 @@
 import React from 'react';
-import { Radio, Users, Cpu, HeartPulse, UserCheck, Building2 } from 'lucide-react';
+import { Radio, Users, Cpu, HeartPulse, UserCheck, Building2, LogOut } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../context/AuthContext';
 
@@ -22,7 +22,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   hospitalTab,
   setHospitalTab,
 }) => {
-  const { activeHospital, activePatient, openAuthModal } = useAuth();
+  const { activeHospital, activePatient, openAuthModal, logoutHospital, logoutPatient } = useAuth();
 
   return (
     <header className="sticky top-0 z-50 border-b border-rule bg-paper-2 shadow-hairline">
@@ -126,11 +126,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <button
                       onClick={() => openAuthModal('hospital', 'login')}
                       className="px-2.5 py-1 text-xs font-mono rounded-xl bg-emergency-light text-emergency border border-emergency/30 font-semibold flex items-center space-x-1.5 hover:bg-emergency-light/80 transition-colors"
-                      title="Click to Switch Hospital Desk or Register"
+                      title="Switch Hospital Desk"
                     >
                       <Building2 className="w-3.5 h-3.5 shrink-0" />
                       <span className="max-w-[140px] truncate">{activeHospital.name.split(' ')[0]}</span>
                       <span className="w-1.5 h-1.5 rounded-full bg-operational shrink-0"></span>
+                    </button>
+                    <button
+                      onClick={() => logoutHospital()}
+                      className="px-2 py-1 text-[11px] font-mono rounded-lg bg-paper border border-rule hover:border-emergency text-ink-muted hover:text-emergency flex items-center space-x-1 transition-colors"
+                      title="Sign Out of Hospital Desk"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span className="hidden sm:inline">Sign Out</span>
                     </button>
                     <button
                       onClick={() => openAuthModal('hospital', 'signup')}
@@ -158,13 +166,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <button
                       onClick={() => openAuthModal('patient', 'login')}
                       className="px-2.5 py-1 text-xs font-mono rounded-xl bg-accent-light text-accent border border-accent/30 font-semibold flex items-center space-x-1.5 hover:bg-accent-light/80 transition-colors"
-                      title="Click to Switch Patient Profile or Sign Out"
+                      title="Patient Profile"
                     >
                       <UserCheck className="w-3.5 h-3.5 shrink-0" />
                       <span className="max-w-[120px] truncate">{activePatient.name.split(' ')[0]}</span>
                       <span className="px-1 py-0.2 text-[9px] bg-accent/20 rounded font-bold">
                         {activePatient.blood_group}
                       </span>
+                    </button>
+                    <button
+                      onClick={() => logoutPatient()}
+                      className="px-2 py-1 text-[11px] font-mono rounded-lg bg-paper border border-rule hover:border-accent text-ink-muted hover:text-accent flex items-center space-x-1 transition-colors"
+                      title="Sign Out of Patient Account"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span className="hidden sm:inline">Sign Out</span>
                     </button>
                     <button
                       onClick={() => openAuthModal('patient', 'signup')}

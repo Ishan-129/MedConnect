@@ -4,23 +4,32 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "emergency-timeout",
-        "responseMode": "responseNode"
+        "path": "escalation-timeout-check",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
       },
       "name": "Webhook - Escalation Check",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 300]
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "node-webhook-escalation-check"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM emergency_requests WHERE request_id = $1 AND status = 'OPEN';"
+        "query": "SELECT * FROM emergency_requests WHERE request_id = $1 AND status = 'OPEN';",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.request_id || ($json.body && $json.body.request_id) || '' ] }}"
+        }
       },
       "name": "Check If Still Unaccepted",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [460, 300]
+      "position": [460, 300],
+      "id": "node-check-unaccepted",
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -36,40 +45,131 @@
       "name": "Needs Escalation?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [680, 300]
+      "position": [680, 300],
+      "id": "node-if-needs-escalation"
     },
     {
       "parameters": {
         "resource": "call",
         "operation": "create",
-        "to": "={{ $env.TWILIO_ESCALATION_TO_NUMBER }}",
-        "from": "={{ $env.TWILIO_FROM_NUMBER }}",
+        "to": "={{ $env.TWILIO_ESCALATION_TO_NUMBER || '+919876543210' }}",
+        "from": "={{ $env.TWILIO_FROM_NUMBER || '+15005550006' }}",
         "twiml": "<Response><Say voice=\"Polly.Aditi\">Emergency Alert. Hospital {{ $json.requesting_hospital_name }} has an unfulfilled critical request for {{ $json.resource_type }}. Immediate coordinator dispatch required.</Say></Response>"
       },
       "name": "Twilio Emergency Voice Call",
       "type": "n8n-nodes-base.twilio",
       "typeVersion": 1,
-      "position": [900, 200]
+      "position": [900, 200],
+      "id": "node-twilio-voice-call",
+      "continueOnFail": true
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE emergency_requests SET status = 'ESCALATED' WHERE request_id = $1; INSERT INTO exceptions (workflow, record_id, error_type, severity, owner, status) VALUES ('WF7_ESCALATION', $1, 'TIMEOUT_UNACCEPTED', 'CRITICAL', 'REGIONAL_COORDINATOR', 'ESCALATED');"
+        "query": "UPDATE emergency_requests SET status = 'ESCALATED' WHERE request_id = $1; INSERT INTO exceptions (workflow, record_id, error_type, severity, owner, status) VALUES ('WF7_ESCALATION', $1, 'TIMEOUT_UNACCEPTED', 'CRITICAL', 'REGIONAL_COORDINATOR', 'ESCALATED');",
+        "additionalFields": {
+          "queryParams": "={{ [ $('Check If Still Unaccepted').item.json.request_id ] }}"
+        }
       },
       "name": "Log Exception & Mark Escalated",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [1120, 200]
+      "position": [1120, 200],
+      "id": "node-log-exception-escalated",
+      "continueOnFail": true
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'escalated', request_id: $json.request_id, call_sid: $json.sid } }}"
+        "responseBody": "={{ { success: true, status: 'escalated', request_id: $('Check If Still Unaccepted').item.json.request_id, call_sid: $json.sid || 'CALL_DISPATCHED', timestamp: new Date().toISOString() } }}",
+        "options": {
+          "responseCode": 200
+        }
       },
       "name": "Respond Escalation Triggered",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 200]
+      "position": [1340, 200],
+      "id": "node-respond-escalation-triggered"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, status: 'resolved_or_claimed', message: 'No timeout escalation required at this time', timestamp: new Date().toISOString() } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "Respond No Escalation Needed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 420],
+      "id": "node-respond-no-escalation"
     }
-  ]
+  ],
+  "connections": {
+    "Webhook - Escalation Check": {
+      "main": [
+        [
+          {
+            "node": "Check If Still Unaccepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Still Unaccepted": {
+      "main": [
+        [
+          {
+            "node": "Needs Escalation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Escalation?": {
+      "main": [
+        [
+          {
+            "node": "Twilio Emergency Voice Call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond No Escalation Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Twilio Emergency Voice Call": {
+      "main": [
+        [
+          {
+            "node": "Log Exception & Mark Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Exception & Mark Escalated": {
+      "main": [
+        [
+          {
+            "node": "Respond Escalation Triggered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
 }

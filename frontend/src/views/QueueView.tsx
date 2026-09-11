@@ -1,11 +1,12 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Users, QrCode, Play, CheckCircle2, ChevronRight, Clock, AlertCircle, RefreshCw, UserCheck, Stethoscope, Loader2 } from 'lucide-react';
+import { Users, QrCode, Play, CheckCircle2, ChevronRight, Clock, AlertCircle, RefreshCw, UserCheck, Stethoscope, Loader2, Search, XCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QueueEntry, QueueStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import { motionTokens, springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabaseClient';
 
 interface QueueViewProps {
   defaultRole?: 'patient' | 'reception' | 'doctor';
@@ -13,14 +14,27 @@ interface QueueViewProps {
 }
 
 export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception', hideRoleSwitcher = false }) => {
-  const { activePatient, activeHospital, openAuthModal } = useAuth();
+  const { activePatient, activeHospital, openAuthModal, getAuthHeader } = useAuth();
   const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>(defaultRole);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueError, setQueueError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const hospitalId = activeHospital?.hospital_id || '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0';
+  // Patient custom token tracking state
+  const [trackedToken, setTrackedToken] = useState<string>(() => {
+    try {
+      return localStorage.getItem('medconnect_patient_token') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [tokenInput, setTokenInput] = useState<string>('');
+  const [trackedStatusData, setTrackedStatusData] = useState<any>(null);
+  const [isSearchingToken, setIsSearchingToken] = useState(false);
+  const [tokenSearchError, setTokenSearchError] = useState<string | null>(null);
+
+  const hospitalId = activeHospital?.hospital_id || '11111111-1111-4111-a111-111111111111';
 
   // Fetch live queue from backend
   const fetchQueue = useCallback(async () => {
@@ -43,117 +57,234 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
     }
   }, [hospitalId]);
 
-  // Mount: load immediately and start 15s polling
+  // Fetch specific token status from backend
+  const fetchTokenStatus = useCallback(async (token: string) => {
+    if (!token) {
+      setTrackedStatusData(null);
+      return;
+    }
+    setIsSearchingToken(true);
+    setTokenSearchError(null);
+    try {
+      const res = await fetch(`/api/queue/status?token=${encodeURIComponent(token)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && (data.token || data.my_token)) {
+          setTrackedStatusData(data);
+          try {
+            localStorage.setItem('medconnect_patient_token', data.token || data.my_token);
+          } catch {}
+        } else {
+          setTokenSearchError(data.message || 'No appointment found with this token');
+        }
+      } else {
+        setTokenSearchError('Failed to retrieve ticket status from hospital database');
+      }
+    } catch (err: any) {
+      setTokenSearchError(err?.message || 'Network error fetching ticket status');
+    } finally {
+      setIsSearchingToken(false);
+    }
+  }, []);
+
+  // Mount: load immediately and subscribe to Supabase Realtime + fallback 6s polling
   useEffect(() => {
     fetchQueue();
-    pollTimerRef.current = setInterval(fetchQueue, 15000);
+    if (trackedToken) {
+      fetchTokenStatus(trackedToken);
+    }
+
+    pollTimerRef.current = setInterval(() => {
+      fetchQueue();
+      if (trackedToken) {
+        fetchTokenStatus(trackedToken);
+      }
+    }, 6000);
+
+    // Supabase Realtime subscription on appointments table
+    const channel = supabase
+      .channel('live-queue-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'appointments' },
+        () => {
+          fetchQueue();
+          if (trackedToken) {
+            fetchTokenStatus(trackedToken);
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      supabase.removeChannel(channel);
     };
-  }, [fetchQueue]);
+  }, [fetchQueue, trackedToken, fetchTokenStatus]);
+
+  // Phase 7: Automatically resolve patient active appointment from real database upon login/mount
+  useEffect(() => {
+    if (activePatient?.patient_id) {
+      fetch(`/api/appointments?patientId=${encodeURIComponent(activePatient.patient_id)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.appointments && data.appointments.length > 0) {
+            // Find active appointment or latest
+            const activeAppt = data.appointments.find((a: any) =>
+              ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'booked', 'checked_in', 'in_consultation'].includes(a.status)
+            ) || data.appointments[0];
+            const tok = activeAppt.token_number || activeAppt.token;
+            if (tok && tok !== trackedToken) {
+              setTrackedToken(tok);
+              fetchTokenStatus(tok);
+            }
+          }
+        })
+        .catch(err => console.warn('[QueueView] Auto-resolve appointment error:', err));
+    }
+  }, [activePatient?.patient_id, fetchTokenStatus, trackedToken]);
+
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
-  // Call Next Patient — optimistic local update, then refresh from backend
+  // Call Next Patient — persist to backend and sync real DB state
   const handleCallNext = async () => {
-    // Optimistic local update for instant UI feedback
-    setQueue((prevQueue) => {
-      let foundCalled = false;
-      return prevQueue.map((entry) => {
-        if (entry.status === 'IN_CONSULTATION') {
-          return { ...entry, status: 'COMPLETED' as QueueStatus };
-        }
-        if (entry.status === 'CALLED') {
-          return { ...entry, status: 'IN_CONSULTATION' as QueueStatus };
-        }
-        if (!foundCalled && entry.status === 'WAITING') {
-          foundCalled = true;
-          return { ...entry, status: 'CALLED' as QueueStatus, position: 0 };
-        }
-        return entry;
-      });
-    });
-
-    // Try to persist to backend
     try {
-      await fetch('/api/queue/call-next', {
+      const res = await fetch('/api/queue/call-next', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify({ hospitalId }),
       });
-      // Refresh queue from backend after a short delay
-      setTimeout(fetchQueue, 500);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.entries) {
+          setQueue(data.entries);
+        } else {
+          fetchQueue();
+        }
+      } else {
+        fetchQueue();
+      }
     } catch {
-      // Optimistic update stays; backend sync failed silently
+      fetchQueue();
     }
   };
 
-  // QR Check-In: validate token via backend, then add to local queue
-  const handleSimulateCheckIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const token = checkInToken.trim().toUpperCase();
-    if (!token) return;
-
-    const normalizedToken = token.startsWith('#') ? token : `#${token}`;
-
-    const exists = queue.some((q) => q.token === normalizedToken);
-    if (exists) {
-      setCheckInMsg({ text: `Patient ${normalizedToken} is already checked in and in the queue.`, error: true });
-      return;
-    }
-
-    // Validate token via backend appointment check
+  // Granular Status Update (e.g. COMPLETED, CALLED, IN_CONSULTATION, CANCELLED)
+  const handleUpdateStatus = async (appointmentId: string, status: string) => {
     try {
-      const res = await fetch(`/api/appointments/check?tokenId=${encodeURIComponent(normalizedToken)}`);
+      const res = await fetch('/api/queue/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ appointmentId, status }),
+      });
       if (res.ok) {
         const data = await res.json();
-        if (data.found && data.appointment) {
-          const appt = data.appointment;
-          const newEntry: QueueEntry = {
-            queue_id: `q-${Date.now()}`,
-            appointment_id: appt.appointment_id || appt.id || `apt-${Date.now()}`,
-            patient_id: appt.patient_id || `pat-${Date.now()}`,
-            patient_name: appt.patient_name || `Checked-In Patient (${normalizedToken})`,
-            doctor_id: appt.doctor_id || '',
-            doctor_name: appt.doctor_name || 'Assigned Doctor',
-            department_name: appt.department_name || 'OPD',
-            token: normalizedToken,
-            position: queue.filter((q) => q.status === 'WAITING').length + 1,
-            check_in_at: new Date().toISOString(),
-            status: 'WAITING',
-            estimated_wait_mins: (queue.filter((q) => q.status === 'WAITING').length + 1) * 10
-          };
-          setQueue((prev) => [...prev, newEntry]);
-          setCheckInMsg({ text: `Check-in verified! ${normalizedToken} enqueued — Patient: ${newEntry.patient_name}.` });
-          setCheckInToken('');
-          return;
+        if (data.entries) {
+          setQueue(data.entries);
         } else {
-          setCheckInMsg({ text: `No appointment found for token ${normalizedToken}. Please verify the QR pass.`, error: true });
-          return;
+          fetchQueue();
         }
       }
     } catch {
-      // Network error — fall back to manual entry below
+      fetchQueue();
     }
+  };
 
-    // Fallback: add as walk-in if backend unreachable
-    const newEntry: QueueEntry = {
-      queue_id: `q-${Date.now()}`,
-      appointment_id: `apt-${Date.now()}`,
-      patient_id: `pat-${Date.now()}`,
-      patient_name: `Walk-in Patient (${normalizedToken})`,
-      doctor_id: '',
-      doctor_name: 'To be assigned',
-      department_name: 'OPD',
-      token: normalizedToken,
-      position: queue.filter((q) => q.status === 'WAITING').length + 1,
-      check_in_at: new Date().toISOString(),
-      status: 'WAITING',
-      estimated_wait_mins: (queue.filter((q) => q.status === 'WAITING').length + 1) * 10
-    };
-    setQueue((prev) => [...prev, newEntry]);
-    setCheckInMsg({ text: `Walk-in added: ${normalizedToken} at position ${newEntry.position}. (Backend offline — token not validated)` });
-    setCheckInToken('');
+  // Real QR Check-In: validate cryptographic pass against backend database
+  const handleSimulateCheckIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const rawInput = checkInToken.trim();
+    if (!rawInput) return;
+
+    try {
+      const authHeader = getAuthHeader();
+      const res = await fetch('/api/qr/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        body: JSON.stringify({
+          qr_data: rawInput,
+          tokenId: rawInput.startsWith('#') || !rawInput.startsWith('{') ? rawInput : undefined,
+          action: 'check_in',
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (data.status === 'VALID') {
+        const appt = data.appointment || {};
+        const newPos = data.queue_position || queue.filter((q) => q.status === 'WAITING').length + 1;
+        const newEntry: QueueEntry = {
+          queue_id: `q-${Date.now()}`,
+          appointment_id: data.appointment_id || appt.appointment_id || appt.id || `apt-${Date.now()}`,
+          patient_id: appt.patient_id || `pat-${Date.now()}`,
+          patient_name: appt.patient_name || `Verified Patient (${data.token || rawInput})`,
+          doctor_id: appt.doctor_id || '',
+          doctor_name: appt.doctor_name || 'Assigned Doctor',
+          department_name: appt.department_name || 'OPD',
+          token: data.token || (rawInput.startsWith('#') ? rawInput : `#${rawInput}`),
+          position: newPos,
+          check_in_at: data.check_in_at || new Date().toISOString(),
+          status: 'WAITING',
+          estimated_wait_mins: data.estimated_wait_minutes || (newPos - 1) * 15,
+        };
+
+        setQueue((prev) => {
+          const filtered = prev.filter((q) => q.token !== newEntry.token);
+          return [...filtered, newEntry];
+        });
+        setCheckInMsg({
+          text: `[VALID] ${data.message || 'Check-in verified successfully!'} Patient: ${newEntry.patient_name} — Doctor: ${newEntry.doctor_name} (Position #${newPos}).`,
+          error: false,
+        });
+        setCheckInToken('');
+        // Refresh queue from backend to stay in sync
+        setTimeout(fetchQueue, 500);
+      } else if (data.status === 'ALREADY USED / CHECKED IN' || data.status === 'ALREADY_USED') {
+        setCheckInMsg({
+          text: `[ALREADY USED / CHECKED IN] ${data.message || 'This pass has already been used.'}`,
+          error: true,
+        });
+      } else if (data.status === 'CANCELLED') {
+        setCheckInMsg({
+          text: `[CANCELLED] ${data.message || 'This appointment was cancelled and cannot be used.'}`,
+          error: true,
+        });
+      } else if (data.status === 'EXPIRED') {
+        setCheckInMsg({
+          text: `[EXPIRED] ${data.message || 'This QR pass has expired.'}`,
+          error: true,
+        });
+      } else if (data.status === 'INVALID') {
+        setCheckInMsg({
+          text: `[INVALID] ${data.message || 'Cryptographic verification failed: Forged or modified QR data rejected.'}`,
+          error: true,
+        });
+      } else if (data.status === 'NOT FOUND') {
+        setCheckInMsg({
+          text: `[NOT FOUND] ${data.message || 'No appointment found in hospital records matching this QR token.'}`,
+          error: true,
+        });
+      } else if (data.status === 'FORBIDDEN') {
+        setCheckInMsg({
+          text: `[FORBIDDEN] ${data.message || 'Unauthorized access: You are not permitted to verify this pass.'}`,
+          error: true,
+        });
+      } else {
+        setCheckInMsg({
+          text: `[VERIFICATION FAILED] ${data.message || 'Unable to verify QR token with backend.'}`,
+          error: true,
+        });
+      }
+    } catch (err: any) {
+      setCheckInMsg({
+        text: `[NETWORK ERROR] Could not connect to verification server: ${err.message}`,
+        error: true,
+      });
+    }
   };
 
   const activeConsultation = queue.find((q) => q.status === 'IN_CONSULTATION');
@@ -433,8 +564,10 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                         <th>Pos</th>
                         <th>Token</th>
                         <th>Patient</th>
-                        <th>Arrival Time</th>
+                        <th>Doctor / OPD</th>
+                        <th>Arrival</th>
                         <th>Status</th>
+                        <th className="text-right">Action</th>
                       </tr>
                     </thead>
                     <motion.tbody>
@@ -454,16 +587,71 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                               ) : item.status === 'CALLED' ? (
                                 <span className="text-accent font-bold">Next</span>
                               ) : (
-                                <span className="tabular-nums">#{idx + 1}</span>
+                                <span className="tabular-nums">#{item.position || idx + 1}</span>
                               )}
                             </td>
-                            <td className="font-bold text-ink tabular-nums">{item.token}</td>
+                            <td className="font-bold text-ink tabular-nums">
+                              {item.token}
+                              {item.token?.startsWith('#EMERG') && (
+                                <span className="ml-1 text-[9px] px-1 py-0.2 rounded bg-emergency/10 text-emergency font-bold">EMERGENCY</span>
+                              )}
+                            </td>
                             <td className="font-medium text-ink-2">{item.patient_name}</td>
-                            <td className="text-ink-muted tabular-nums">
+                            <td className="text-xs text-ink-muted">{item.doctor_name}</td>
+                            <td className="text-ink-muted tabular-nums text-xs">
                               {new Date(item.check_in_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </td>
                             <td>
                               <StatusBadge status={item.status} />
+                            </td>
+                            <td className="text-right space-x-1">
+                              {item.status === 'WAITING' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.appointment_id, 'CALLED')}
+                                    className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-accent/10 text-accent hover:bg-accent hover:text-white transition-colors"
+                                  >
+                                    Call
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.appointment_id, 'CANCELLED')}
+                                    className="text-[10px] font-mono font-semibold px-1.5 py-1 rounded bg-red-500/10 text-red-500 hover:bg-red-600 hover:text-white transition-colors"
+                                    title="Cancel Appointment"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              )}
+                              {item.status === 'CALLED' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.appointment_id, 'IN_CONSULTATION')}
+                                    className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-operational/10 text-operational hover:bg-operational hover:text-white transition-colors"
+                                  >
+                                    Admit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.appointment_id, 'SKIPPED')}
+                                    className="text-[10px] font-mono font-semibold px-1.5 py-1 rounded bg-amber-500/10 text-amber-500 hover:bg-amber-600 hover:text-white transition-colors"
+                                    title="Mark No-Show / Skip"
+                                  >
+                                    Skip
+                                  </button>
+                                </>
+                              )}
+                              {item.status === 'IN_CONSULTATION' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateStatus(item.appointment_id, 'COMPLETED')}
+                                  className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-green-500/10 text-green-500 hover:bg-green-600 hover:text-white transition-colors"
+                                >
+                                  Complete
+                                </button>
+                              )}
                             </td>
                           </motion.tr>
                         ))}
@@ -532,60 +720,205 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
         )}
 
         {/* VIEW 3: PATIENT LIVE VIEW */}
-        {roleView === 'patient' && (
-          <motion.div
-            key="queue-patient-view"
-            initial={{ opacity: 0, y: motionTokens.distance.sm }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -motionTokens.distance.sm }}
-            transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
-            className="max-w-xl mx-auto pulse-card p-8 text-center space-y-6"
-          >
-            <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 text-accent mx-auto flex items-center justify-center">
-              <Users className="w-8 h-8" />
-            </div>
+        {roleView === 'patient' && (() => {
+          // Find matching queue entry for logged-in patient or tracked token
+          const myQueueEntry = queue.find(
+            (q) =>
+              (trackedToken && (q.token === trackedToken || q.appointment_id === trackedToken)) ||
+              (activePatient?.patient_id && q.patient_id === activePatient.patient_id) ||
+              (activePatient?.phone && (q.patient_phone === activePatient.phone || (q.patient_phone && q.patient_phone.endsWith(activePatient.phone.slice(-10))))) ||
+              (activePatient?.name && q.patient_name?.toLowerCase().includes(activePatient.name.toLowerCase().split(' ')[0]))
+          );
 
-            <div>
-              <span className="pulse-badge pulse-badge-blue">Your Live Ticket</span>
-              <h2 className="pulse-h1 text-4xl font-extrabold text-accent mt-2 tabular-nums">#MED-4029</h2>
-              <p className="text-xs font-mono text-ink-2 mt-1 font-semibold">
-                Patient: {activePatient?.name || 'Ananya Deshmukh'} {activePatient && `(${activePatient.blood_group})`} · Dr. Priya Nair (Dermatology)
-              </p>
-              <div className="mt-2 flex items-center justify-center space-x-2">
-                <span className="text-[11px] font-mono text-ink-muted">
-                  Phone: {activePatient?.phone || '+91 98765 43210'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => openAuthModal('patient', 'login')}
-                  className="text-[10px] font-mono text-accent hover:underline ml-1"
-                >
-                  (Switch Account)
-                </button>
-              </div>
-            </div>
+          const dbRecord = trackedStatusData?.success ? trackedStatusData : null;
 
-            <div className="grid grid-cols-2 gap-4 py-4 border-y border-rule">
-              <div className="p-3 bg-paper-subtle rounded-xl border border-rule">
-                <span className="text-xs font-mono text-ink-muted block font-medium">Queue Position</span>
-                <span className="text-2xl font-mono font-bold text-ink mt-1 block tabular-nums">
-                  {waitingPatients.findIndex((p) => p.token === '#MED-4029') + 1 || 3}
-                </span>
-                <span className="text-[10px] font-mono text-ink-muted">Ahead of you</span>
-              </div>
-              <div className="p-3 bg-paper-subtle rounded-xl border border-rule">
-                <span className="text-xs font-mono text-ink-muted block font-medium">Estimated Wait</span>
-                <span className="text-2xl font-mono font-bold text-amber-500 mt-1 block tabular-nums">~15 min</span>
-                <span className="text-[10px] font-mono text-ink-muted">Live Telegram sync</span>
-              </div>
-            </div>
+          const myToken = myQueueEntry?.token || dbRecord?.token || dbRecord?.my_token || trackedToken;
+          const hasTicket = Boolean(myQueueEntry || dbRecord?.token);
 
-            <div className="pulse-alert pulse-alert-info text-xs font-mono text-ink-2 text-left">
-              <Clock className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-              <span>You will receive an automated Telegram notification when you are 1 patient away from your consultation.</span>
-            </div>
-          </motion.div>
-        )}
+          const myStatus = myQueueEntry?.status || dbRecord?.status || 'WAITING';
+          const myPos = myStatus === 'IN_CONSULTATION' ? 0 : (myStatus === 'CALLED' ? 0 : (myQueueEntry?.position ?? dbRecord?.queue_position ?? 1));
+          const myDoc = myQueueEntry?.doctor_name || dbRecord?.doctor_name || 'Assigned OPD Doctor';
+          const myDept = myQueueEntry?.department_name || dbRecord?.department_name || 'General OPD';
+          const myHosp = myQueueEntry?.hospital_name || dbRecord?.hospital_name || activeHospital?.name || 'MedConnect Partner Hospital';
+          const peopleAhead = myQueueEntry ? Math.max(0, myPos - 1) : (dbRecord?.people_ahead ?? Math.max(0, myPos - 1));
+          const estimatedWait = myQueueEntry?.estimated_wait_mins ?? dbRecord?.estimated_wait_minutes ?? (peopleAhead * 15);
+
+          const handleTrackSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            const clean = tokenInput.trim();
+            if (clean) {
+              setTrackedToken(clean);
+              fetchTokenStatus(clean);
+            }
+          };
+
+          if (!hasTicket) {
+            return (
+              <motion.div
+                key="queue-patient-empty"
+                initial={{ opacity: 0, y: motionTokens.distance.sm }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -motionTokens.distance.sm }}
+                transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
+                className="max-w-xl mx-auto pulse-card p-8 text-center space-y-6"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 text-accent mx-auto flex items-center justify-center">
+                  <Users className="w-8 h-8" />
+                </div>
+
+                <div>
+                  <span className="pulse-badge pulse-badge-blue">Live Patient Tracker</span>
+                  <h2 className="pulse-h2 text-2xl font-bold text-ink mt-2">Track Your OPD Appointment</h2>
+                  <p className="pulse-text-sm text-ink-muted mt-1">
+                    Enter your appointment token (e.g. #MED-4030 or #EMERG-1100) to monitor your live queue position and estimated arrival call.
+                  </p>
+                </div>
+
+                <form onSubmit={handleTrackSubmit} className="space-y-3">
+                  <div className="flex space-x-2">
+                    <input
+                      type="text"
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.target.value)}
+                      placeholder="Enter Token e.g. #MED-4030"
+                      className="pulse-input flex-1 uppercase tabular-nums font-mono"
+                    />
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.96 }}
+                      type="submit"
+                      disabled={isSearchingToken || !tokenInput.trim()}
+                      className="pulse-btn pulse-btn-primary flex items-center space-x-1.5"
+                    >
+                      {isSearchingToken ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                      <span>Track</span>
+                    </motion.button>
+                  </div>
+                  {tokenSearchError && (
+                    <div className="text-xs font-mono text-red-500 bg-red-500/10 p-2 rounded-lg border border-red-500/20 text-left flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{tokenSearchError}</span>
+                    </div>
+                  )}
+                </form>
+
+                <div className="pt-4 border-t border-rule flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-ink-muted">
+                  <span>Don't have an appointment yet?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const navEvt = new CustomEvent('navigate-view', { detail: { view: 'receptionist' } });
+                      window.dispatchEvent(navEvt);
+                    }}
+                    className="pulse-btn pulse-btn-secondary text-xs px-3 py-1.5"
+                  >
+                    Book with AI Receptionist →
+                  </button>
+                </div>
+              </motion.div>
+            );
+          }
+
+          return (
+            <motion.div
+              key="queue-patient-view"
+              initial={{ opacity: 0, y: motionTokens.distance.sm }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -motionTokens.distance.sm }}
+              transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
+              className="max-w-xl mx-auto pulse-card p-8 text-center space-y-6"
+            >
+              <div className="w-16 h-16 rounded-2xl bg-accent-light border border-accent/30 text-accent mx-auto flex items-center justify-center">
+                <Users className="w-8 h-8" />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-center space-x-2">
+                  <span className="pulse-badge pulse-badge-blue">Verified Hospital Ticket</span>
+                  {myToken?.startsWith('#EMERG') && (
+                    <span className="pulse-badge pulse-badge-emergency">Emergency Priority</span>
+                  )}
+                </div>
+                <h2 className="pulse-h1 text-4xl font-extrabold text-accent mt-2 tabular-nums">{myToken}</h2>
+                <p className="text-xs font-mono text-ink-2 mt-1 font-semibold">
+                  Patient: {myQueueEntry?.patient_name || dbRecord?.patient_name || activePatient?.name || 'Patient'} · {myDoc} ({myDept})
+                </p>
+                <p className="text-[11px] font-mono text-ink-muted mt-0.5">
+                  {myHosp}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 py-4 border-y border-rule">
+                <div className="p-3 bg-paper-subtle rounded-xl border border-rule">
+                  <span className="text-xs font-mono text-ink-muted block font-medium">Queue Status</span>
+                  <span className="text-xl font-mono font-bold text-ink mt-1 block tabular-nums">
+                    {myStatus === 'IN_CONSULTATION' ? (
+                      <span className="text-operational font-bold">In Room Now</span>
+                    ) : myStatus === 'CALLED' ? (
+                      <span className="text-accent animate-pulse font-bold">Called! Enter Room</span>
+                    ) : myStatus === 'COMPLETED' ? (
+                      <span className="text-operational">Completed</span>
+                    ) : myStatus === 'CANCELLED' ? (
+                      <span className="text-emergency">Cancelled</span>
+                    ) : (
+                      <span>Position #{myPos}</span>
+                    )}
+                  </span>
+                  <span className="text-[10px] font-mono text-ink-muted">
+                    {myStatus === 'IN_CONSULTATION' ? 'Active Consultation' : (myStatus === 'CALLED' ? 'Doctor is waiting' : `${peopleAhead} ahead of you`)}
+                  </span>
+                </div>
+                <div className="p-3 bg-paper-subtle rounded-xl border border-rule">
+                  <span className="text-xs font-mono text-ink-muted block font-medium">Estimated Wait</span>
+                  <span className="text-2xl font-mono font-bold text-amber-500 mt-1 block tabular-nums">
+                    {myStatus === 'IN_CONSULTATION' || myStatus === 'CALLED' ? '0 min' : `~${estimatedWait} min`}
+                  </span>
+                  <span className="text-[10px] font-mono text-ink-muted flex items-center justify-center gap-1">
+                    <span className="pulse-dot pulse-dot-green" /> Real Database Sync
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <form onSubmit={handleTrackSubmit} className="flex-1 flex space-x-2">
+                  <input
+                    type="text"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    placeholder="Switch token (e.g. #MED-...)"
+                    className="pulse-input text-xs uppercase flex-1 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    className="pulse-btn pulse-btn-secondary text-xs px-2.5 py-1.5"
+                    title="Switch Token"
+                  >
+                    Switch
+                  </button>
+                </form>
+                {trackedToken && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrackedToken('');
+                      setTrackedStatusData(null);
+                      try { localStorage.removeItem('medconnect_patient_token'); } catch {}
+                    }}
+                    className="text-[11px] font-mono text-ink-muted hover:text-emergency ml-2"
+                    title="Clear Token"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              <div className="pulse-alert pulse-alert-info text-xs font-mono text-ink-2 text-left">
+                <Clock className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <span>State is verified against live hospital records and refreshes synchronously.</span>
+              </div>
+            </motion.div>
+          );
+        })()}
       </AnimatePresence>
 
     </div>

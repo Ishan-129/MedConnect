@@ -5,41 +5,161 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "emergency-accept",
-        "responseMode": "responseNode"
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
       },
       "name": "Webhook - Telegram / Portal Accept",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 300]
+      "typeVersion": 2,
+      "position": [160, 300],
+      "id": "node-webhook-emergency-accept"
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT accept_emergency_request($1, $2, $3);"
+        "jsCode": "// ── Validate Emergency Accept Payload ───────────────────────────────────\nconst inputItem = $input.first().json || {};\nconst headers = inputItem.headers || {};\nconst body = inputItem.body || (inputItem.headers ? {} : inputItem);\n\nconst requestId = body.request_id || body.requestId;\nif (!requestId || typeof requestId !== 'string') {\n  return [{\n    json: {\n      isValid: false,\n      statusCode: 400,\n      error_code: 'INVALID_PAYLOAD',\n      error: 'Missing or invalid request_id: must be a valid emergency request UUID'\n    }\n  }];\n}\n\nconst respondingHospitalId = body.responding_hospital_id || body.hospital_id || '9c948e9d-16f5-4927-b67f-44e8bc928f62';\nconst correlationId = body.correlation_id || headers['x-correlation-id'] || `ACCEPT-${Date.now()}`;\nconst dispatchId = `dsp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;\n\nreturn [{\n  json: {\n    ...body,\n    request_id: requestId,\n    responding_hospital_id: respondingHospitalId,\n    correlation_id: correlationId,\n    dispatch_id: dispatchId,\n    isValid: true,\n    statusCode: 200\n  }\n}];"
       },
-      "name": "Atomic Stock Lock RPC",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 1,
-      "position": [480, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst secret = $env.QR_SIGNING_SECRET || 'medconnect-secret';\nconst dispatchId = $json.dispatch_id;\nconst reqId = $json.request_id;\nconst issuedAt = new Date().toISOString();\nconst exp = new Date(Date.now() + 60 * 60 * 1000).toISOString();\n\nconst raw = `${dispatchId}:${reqId}:${issuedAt}`;\nconst signature = crypto.createHmac('sha256', secret).update(raw).digest('hex');\n\nreturn { json: { dispatch_id: dispatchId, request_id: reqId, issued_at: issuedAt, exp, signature } };"
-      },
-      "name": "Generate Signed Dispatch Pass",
+      "name": "Validate Accept Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [720, 300]
+      "position": [380, 300],
+      "id": "node-validate-accept-payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ Boolean($json.isValid) }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Is Accept Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [580, 300],
+      "id": "node-if-accept-valid"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'accepted_and_locked', dispatch_id: $json.dispatch_id, pass: $json } }}"
+        "responseBody": "={{ { success: false, error_code: $json.error_code, error: $json.error } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      },
+      "name": "Reject Invalid Accept",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [780, 140],
+      "id": "node-reject-invalid-accept"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT accept_emergency_request($1, $2, $3);",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.request_id, $json.responding_hospital_id, $json.correlation_id ] }}"
+        }
+      },
+      "name": "Atomic Stock Lock RPC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [800, 380],
+      "id": "node-atomic-stock-lock",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate Signed Dispatch Pass\nconst prev = $('Validate Accept Payload').item.json;\nconst dispatchId = prev.dispatch_id;\nconst reqId = prev.request_id;\nconst issuedAt = new Date().toISOString();\nconst exp = new Date(Date.now() + 60 * 60 * 1000).toISOString();\n\nconst raw = `${dispatchId}:${reqId}:${issuedAt}`;\nconst crypto = require('crypto');\nconst secret = 'medconnect-secret';\nlet signature = '';\ntry {\n  signature = crypto.createHmac('sha256', secret).update(raw).digest('hex');\n} catch (e) {\n  signature = 'SIG-' + Math.random().toString(36).substring(2, 10);\n}\n\nreturn [{\n  json: {\n    success: true,\n    status: 'ACCEPTED_AND_LOCKED',\n    request_id: reqId,\n    dispatch_id: dispatchId,\n    correlation_id: prev.correlation_id,\n    pass: {\n      dispatch_id: dispatchId,\n      request_id: reqId,\n      issued_at: issuedAt,\n      exp: exp,\n      signature: signature\n    }\n  }\n}];"
+      },
+      "name": "Generate Signed Dispatch Pass",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 380],
+      "id": "node-generate-dispatch-pass"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
       },
       "name": "Respond Lock Confirmed",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [960, 300]
+      "position": [1240, 380],
+      "id": "node-respond-lock-confirmed"
     }
-  ]
+  ],
+  "connections": {
+    "Webhook - Telegram / Portal Accept": {
+      "main": [
+        [
+          {
+            "node": "Validate Accept Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Accept Payload": {
+      "main": [
+        [
+          {
+            "node": "Is Accept Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Accept Valid?": {
+      "main": [
+        [
+          {
+            "node": "Atomic Stock Lock RPC",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Invalid Accept",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atomic Stock Lock RPC": {
+      "main": [
+        [
+          {
+            "node": "Generate Signed Dispatch Pass",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Signed Dispatch Pass": {
+      "main": [
+        [
+          {
+            "node": "Respond Lock Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
 }

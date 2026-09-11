@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { HospitalUser, PatientUser, ResourceType } from '../types';
-import { INITIAL_HOSPITALS } from '../lib/mockData';
-import { supabase, isLiveSupabase } from '../lib/supabaseClient';
+import { supabase } from '../lib/supabaseClient';
 
 export interface SignupHospitalPayload {
   name: string;
@@ -33,13 +32,15 @@ export interface AuthContextType {
   activeHospital: HospitalUser | null;
   activePatient: PatientUser | null;
   allHospitals: HospitalUser[];
+  token: string | null;
+  isLoadingAuth: boolean;
   loginHospital: (identifier: string, password?: string) => Promise<{ success: boolean; message?: string }>;
   signupHospital: (data: SignupHospitalPayload) => Promise<{ success: boolean; hospital?: HospitalUser; message?: string }>;
-  logoutHospital: () => void;
+  logoutHospital: () => Promise<void>;
   switchHospital: (hospitalId: string) => void;
-  loginPatient: (phone: string, password?: string) => Promise<{ success: boolean; message?: string }>;
+  loginPatient: (identifier: string, password?: string) => Promise<{ success: boolean; message?: string }>;
   signupPatient: (data: SignupPatientPayload) => Promise<{ success: boolean; patient?: PatientUser; message?: string }>;
-  logoutPatient: () => void;
+  logoutPatient: () => Promise<void>;
   isAuthModalOpen: boolean;
   authModalConfig: {
     tab: 'hospital' | 'patient';
@@ -47,132 +48,46 @@ export interface AuthContextType {
   };
   openAuthModal: (tab?: 'hospital' | 'patient', mode?: 'login' | 'signup') => void;
   closeAuthModal: () => void;
+  getAuthHeader: () => Record<string, string>;
 }
 
-const DEFAULT_HOSPITALS: HospitalUser[] = INITIAL_HOSPITALS.map((h) => ({
-  hospital_id: h.hospital_id,
-  name: h.name,
-  contact: h.contact,
-  telegram_chat_id: h.telegram_chat_id || '-1002345678901',
-  latitude: h.latitude,
-  longitude: h.longitude,
-  verification_status: 'VERIFIED',
-  address: 'Ansari Nagar, New Delhi',
-  contact_email: 'emergency@hospital.gov.in',
-  contact_person: 'Medical Superintendent',
-  supported_resources: h.supported_resources,
-}));
-
-const DEFAULT_PATIENTS: PatientUser[] = [
+const DEFAULT_HOSPITALS: HospitalUser[] = [
   {
-    patient_id: 'pat-1111-ananya',
-    name: 'Ananya Deshmukh',
-    phone: '+91 98765 43210',
-    email: 'ananya.deshmukh@gmail.com',
-    blood_group: 'O-',
-    age: 29,
-    gender: 'Female',
-    emergency_contact_name: 'Rahul Deshmukh (Spouse)',
-    emergency_contact_phone: '+91 98765 43219',
-    address: 'Saket, New Delhi',
+    hospital_id: '11111111-1111-4111-a111-111111111111',
+    name: 'All India Institute of Medical Sciences (AIIMS) New Delhi',
+    contact: '+91-11-26588500',
+    telegram_chat_id: '6537122486',
+    latitude: 28.5672,
+    longitude: 77.21,
+    verification_status: 'VERIFIED',
+    address: 'Ansari Nagar, New Delhi',
+    contact_email: 'emergency@aiims.gov.in',
+    contact_person: 'Medical Superintendent',
+    supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
   },
   {
-    patient_id: 'pat-2222-rohan',
-    name: 'Rohan Verma',
-    phone: '+91 98111 22334',
-    email: 'rohan.verma@outlook.com',
-    blood_group: 'B+',
-    age: 42,
-    gender: 'Male',
-    emergency_contact_name: 'Meera Verma',
-    emergency_contact_phone: '+91 98111 22335',
-    address: 'Green Park Extension, New Delhi',
+    hospital_id: '22222222-2222-4222-a222-222222222222',
+    name: 'Safdarjung Hospital',
+    contact: '+91-11-26165060',
+    telegram_chat_id: '6537122486',
+    latitude: 28.57,
+    longitude: 77.2078,
+    verification_status: 'VERIFIED',
+    address: 'Ring Road, Opposite AIIMS, New Delhi',
+    contact_email: 'emergency@safdarjung.gov.in',
+    contact_person: 'Chief Medical Officer',
+    supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
   },
 ];
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // All hospitals (initial seeded + local additions)
-  const [allHospitals, setAllHospitals] = useState<HospitalUser[]>(() => {
-    try {
-      const saved = localStorage.getItem('medconnect_all_hospitals');
-      return saved ? JSON.parse(saved) : DEFAULT_HOSPITALS;
-    } catch {
-      return DEFAULT_HOSPITALS;
-    }
-  });
-
-  // Active hospital session
-  const [activeHospital, setActiveHospital] = useState<HospitalUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('medconnect_active_hospital');
-      if (saved) return JSON.parse(saved);
-      return DEFAULT_HOSPITALS[0]; // Default: AIIMS New Delhi for instant demo readiness
-    } catch {
-      return DEFAULT_HOSPITALS[0];
-    }
-  });
-
-  // On mount: attempt to load live hospitals from backend (augments local seed)
-  const loadLiveHospitals = useCallback(async () => {
-    try {
-      const res = await fetch('/api/hospitals');
-      if (res.ok) {
-        const data = await res.json();
-        const liveHospitals: HospitalUser[] = (data.hospitals || []).map((h: any) => ({
-          hospital_id: h.hospital_id || h.id,
-          name: h.name,
-          contact: h.contact || '',
-          telegram_chat_id: h.telegram_chat_id || '',
-          latitude: h.latitude || 0,
-          longitude: h.longitude || 0,
-          address: h.address || '',
-          contact_email: h.contact_email || '',
-          contact_person: h.contact_person || '',
-          verification_status: h.verification_status || 'VERIFIED',
-          supported_resources: h.supported_resources || [],
-        }));
-        if (liveHospitals.length > 0) {
-          // Merge: live DB hospitals take precedence; keep any local-only ones
-          setAllHospitals((prev) => {
-            const existingIds = new Set(liveHospitals.map(h => h.hospital_id));
-            const localOnly = prev.filter(h => !existingIds.has(h.hospital_id));
-            return [...liveHospitals, ...localOnly];
-          });
-          // If no active hospital session yet, use first live hospital
-          setActiveHospital((prev) => prev || liveHospitals[0]);
-        }
-      }
-    } catch {
-      // Backend not available — local seed data is the fallback
-    }
-  }, []);
-
-  useEffect(() => {
-    loadLiveHospitals();
-  }, [loadLiveHospitals]);
-
-  // Registered patients
-  const [allPatients, setAllPatients] = useState<PatientUser[]>(() => {
-    try {
-      const saved = localStorage.getItem('medconnect_all_patients');
-      return saved ? JSON.parse(saved) : DEFAULT_PATIENTS;
-    } catch {
-      return DEFAULT_PATIENTS;
-    }
-  });
-
-  // Active patient session
-  const [activePatient, setActivePatient] = useState<PatientUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('medconnect_active_patient');
-      if (saved) return JSON.parse(saved);
-      return DEFAULT_PATIENTS[0]; // Default: Ananya Deshmukh
-    } catch {
-      return DEFAULT_PATIENTS[0];
-    }
-  });
+  const [allHospitals, setAllHospitals] = useState<HospitalUser[]>(DEFAULT_HOSPITALS);
+  const [activeHospital, setActiveHospital] = useState<HospitalUser | null>(null);
+  const [activePatient, setActivePatient] = useState<PatientUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
 
   // Modal controls
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -184,46 +99,139 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     mode: 'login',
   });
 
-  // Persist changes
-  useEffect(() => {
-    try {
-      localStorage.setItem('medconnect_all_hospitals', JSON.stringify(allHospitals));
-    } catch (e) {
-      console.warn('localStorage error', e);
-    }
-  }, [allHospitals]);
+  // Helper to build authorization headers for API calls
+  const getAuthHeader = useCallback((): Record<string, string> => {
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, [token]);
 
-  useEffect(() => {
+  // Load hospitals from backend API or Supabase
+  const loadLiveHospitals = useCallback(async () => {
     try {
-      if (activeHospital) {
-        localStorage.setItem('medconnect_active_hospital', JSON.stringify(activeHospital));
-      } else {
-        localStorage.removeItem('medconnect_active_hospital');
+      const res = await fetch('/api/hospitals');
+      if (res.ok) {
+        const data = await res.json();
+        const liveHospitals: HospitalUser[] = (data.hospitals || []).map((h: any) => ({
+          hospital_id: h.hospital_id || h.id,
+          name: h.name,
+          contact: h.contact || h.contact_phone || '',
+          telegram_chat_id: h.telegram_chat_id || '',
+          latitude: h.latitude || 0,
+          longitude: h.longitude || 0,
+          address: h.address || '',
+          contact_email: h.contact_email || '',
+          contact_person: h.contact_person || '',
+          verification_status: h.verification_status || 'VERIFIED',
+          supported_resources: h.supported_resources || [
+            'O_NEG_BLOOD',
+            'OXYGEN',
+            'ICU_BED',
+            'VENTILATOR',
+            'AMBULANCE',
+          ],
+        }));
+        if (liveHospitals.length > 0) {
+          setAllHospitals((prev) => {
+            const existingIds = new Set(liveHospitals.map(h => h.hospital_id));
+            const localOnly = prev.filter(h => !existingIds.has(h.hospital_id));
+            return [...liveHospitals, ...localOnly];
+          });
+        }
       }
     } catch (e) {
-      console.warn('localStorage error', e);
+      console.warn('[AuthContext] Note loading live hospitals:', e);
     }
-  }, [activeHospital]);
+  }, []);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('medconnect_all_patients', JSON.stringify(allPatients));
-    } catch (e) {
-      console.warn('localStorage error', e);
+  // Sync Supabase Auth session with local state
+  const syncUserFromSession = useCallback(async (session: any) => {
+    if (!session || !session.user) {
+      setActiveHospital(null);
+      setActivePatient(null);
+      setToken(null);
+      return;
     }
-  }, [allPatients]);
 
+    const currentToken = session.access_token;
+    setToken(currentToken);
+
+    const user = session.user;
+    const role = user.user_metadata?.role?.toLowerCase() || 'patient';
+
+    if (role === 'hospital') {
+      const hospitalUser: HospitalUser = {
+        hospital_id: user.user_metadata?.hospital_id || user.id,
+        name: user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.hospital_name || 'Hospital Facility',
+        contact: user.user_metadata?.phone || user.user_metadata?.phone_number || user.user_metadata?.contact_phone || '',
+        telegram_chat_id: user.user_metadata?.telegram_chat_id || '6537122486',
+        latitude: user.user_metadata?.latitude || 28.5672,
+        longitude: user.user_metadata?.longitude || 77.21,
+        address: user.user_metadata?.address || 'New Delhi',
+        contact_email: user.email || '',
+        contact_person: user.user_metadata?.contact_person || 'Desk Officer',
+        verification_status: 'VERIFIED',
+        supported_resources: [
+          'O_NEG_BLOOD',
+          'OXYGEN',
+          'ICU_BED',
+          'VENTILATOR',
+          'AMBULANCE',
+        ],
+      };
+      setActiveHospital(hospitalUser);
+      setActivePatient(null);
+    } else {
+      const patientUser: PatientUser = {
+        patient_id: user.id,
+        name: user.user_metadata?.full_name || user.user_metadata?.name || 'Registered Patient',
+        phone: user.user_metadata?.phone || user.user_metadata?.phone_number || '',
+        email: user.email || '',
+        blood_group: user.user_metadata?.blood_group || 'O+',
+        age: user.user_metadata?.age || 28,
+        gender: user.user_metadata?.gender || 'Female',
+        emergency_contact_name: user.user_metadata?.emergency_contact_name || '',
+        emergency_contact_phone: user.user_metadata?.emergency_contact_phone || '',
+        address: user.user_metadata?.address || '',
+      };
+      setActivePatient(patientUser);
+      setActiveHospital(null);
+    }
+  }, []);
+
+  // On mount: restore session from Supabase client and load hospitals
   useEffect(() => {
-    try {
-      if (activePatient) {
-        localStorage.setItem('medconnect_active_patient', JSON.stringify(activePatient));
-      } else {
-        localStorage.removeItem('medconnect_active_patient');
+    loadLiveHospitals();
+
+    async function initSession() {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session) {
+          await syncUserFromSession(data.session);
+        }
+      } catch (err) {
+        console.warn('[AuthContext] Session retrieval error:', err);
+      } finally {
+        setIsLoadingAuth(false);
       }
-    } catch (e) {
-      console.warn('localStorage error', e);
     }
-  }, [activePatient]);
+
+    initSession();
+
+    // Listen for auth changes (token refresh, sign-in, sign-out)
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session) {
+        await syncUserFromSession(session);
+      } else {
+        setActiveHospital(null);
+        setActivePatient(null);
+        setToken(null);
+      }
+      setIsLoadingAuth(false);
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [loadLiveHospitals, syncUserFromSession]);
 
   const openAuthModal = (tab: 'hospital' | 'patient' = 'hospital', mode: 'login' | 'signup' = 'login') => {
     setAuthModalConfig({ tab, mode });
@@ -234,7 +242,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsAuthModalOpen(false);
   };
 
-  // Switch hospital perspective instantly
   const switchHospital = (hospitalId: string) => {
     const found = allHospitals.find((h) => h.hospital_id === hospitalId);
     if (found) {
@@ -243,180 +250,272 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Hospital Login
-  const loginHospital = async (identifier: string, _password?: string) => {
-    const cleanId = identifier.trim().toLowerCase();
-    const found = allHospitals.find(
-      (h) =>
-        h.hospital_id.toLowerCase() === cleanId ||
-        h.name.toLowerCase().includes(cleanId) ||
-        h.contact.includes(cleanId) ||
-        h.telegram_chat_id.includes(cleanId) ||
-        (h.contact_email && h.contact_email.toLowerCase() === cleanId)
-    );
-
-    if (found) {
-      setActiveHospital(found);
-      return { success: true };
+  const loginHospital = async (identifier: string, password?: string) => {
+    if (!password) {
+      return { success: false, message: 'Desk security password is required.' };
     }
 
-    return {
-      success: false,
-      message: 'Hospital not found with provided phone, Telegram Chat ID, or facility name.',
-    };
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: identifier.trim(),
+          password,
+          role: 'hospital',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, message: data.message || 'Hospital authentication failed.' };
+      }
+
+      if (data.session) {
+        await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+      }
+
+      const hospUser: HospitalUser = {
+        hospital_id: data.user.id || data.user.user_id,
+        name: data.user.name,
+        contact: data.user.phone,
+        telegram_chat_id: data.user.profile?.telegram_chat_id || '6537122486',
+        latitude: data.user.profile?.latitude || 28.5672,
+        longitude: data.user.profile?.longitude || 77.21,
+        address: data.user.profile?.address || 'New Delhi',
+        contact_email: data.user.email,
+        contact_person: data.user.profile?.contact_person || 'Desk Officer',
+        verification_status: 'VERIFIED',
+        supported_resources: [
+          'O_NEG_BLOOD',
+          'OXYGEN',
+          'ICU_BED',
+          'VENTILATOR',
+          'AMBULANCE',
+        ],
+      };
+
+      setActiveHospital(hospUser);
+      setActivePatient(null);
+      setToken(data.token || data.session?.access_token);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error during hospital login.' };
+    }
   };
 
   // Hospital Sign Up
   const signupHospital = async (data: SignupHospitalPayload) => {
-    const newId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
+    const email = data.contact_email?.trim();
+    const password = data.password;
 
-    const newHospital: HospitalUser = {
-      hospital_id: newId,
-      name: data.name.trim(),
-      contact: data.contact.trim(),
-      telegram_chat_id: data.telegram_chat_id.trim() || `-100${Math.floor(1000000000 + Math.random() * 9000000000)}`,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      address: data.address,
-      contact_email: data.contact_email || 'desk@hospital.org',
-      contact_person: data.contact_person || 'Emergency Officer',
-      verification_status: 'VERIFIED',
-      supported_resources: data.supported_resources || [
-        'O_NEG_BLOOD',
-        'OXYGEN',
-        'ICU_BED',
-        'VENTILATOR',
-        'AMBULANCE',
-      ],
-    };
-
-    // Attempt remote registration if Supabase is connected
-    if (isLiveSupabase) {
-      try {
-        await supabase.from('hospitals').insert([
-          {
-            hospital_id: newHospital.hospital_id,
-            name: newHospital.name,
-            contact: newHospital.contact,
-            telegram_chat_id: newHospital.telegram_chat_id,
-            latitude: newHospital.latitude,
-            longitude: newHospital.longitude,
-            address: newHospital.address,
-            contact_email: newHospital.contact_email,
-            contact_person: newHospital.contact_person,
-            active_status: true,
-            verification_status: 'VERIFIED',
-          },
-        ]);
-      } catch (err) {
-        console.warn('Supabase remote insert fallback to local', err);
-      }
+    if (!email || !email.includes('@')) {
+      return { success: false, message: 'A valid email address is required for registration.' };
+    }
+    if (!password || password.length < 6) {
+      return { success: false, message: 'Password must be at least 6 characters.' };
     }
 
-    setAllHospitals((prev) => [newHospital, ...prev]);
-    setActiveHospital(newHospital);
-    return { success: true, hospital: newHospital };
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          role: 'hospital',
+          name: data.name.trim(),
+          phone: data.contact.trim(),
+          telegram_chat_id: data.telegram_chat_id.trim() || '6537122486',
+          latitude: data.latitude,
+          longitude: data.longitude,
+          address: data.address,
+          contact_person: data.contact_person,
+          supported_resources: data.supported_resources,
+        }),
+      });
+
+      const respData = await res.json();
+      if (!res.ok) {
+        return { success: false, message: respData.message || 'Registration failed.' };
+      }
+
+      if (respData.session) {
+        await supabase.auth.setSession({
+          access_token: respData.session.access_token,
+          refresh_token: respData.session.refresh_token,
+        });
+      }
+
+      const newHospital: HospitalUser = {
+        hospital_id: respData.user.id,
+        name: respData.user.name,
+        contact: respData.user.phone,
+        telegram_chat_id: data.telegram_chat_id.trim() || '6537122486',
+        latitude: data.latitude,
+        longitude: data.longitude,
+        address: data.address,
+        contact_email: email,
+        contact_person: data.contact_person || 'Desk Officer',
+        verification_status: 'VERIFIED',
+        supported_resources: data.supported_resources || [
+          'O_NEG_BLOOD',
+          'OXYGEN',
+          'ICU_BED',
+          'VENTILATOR',
+          'AMBULANCE',
+        ],
+      };
+
+      setAllHospitals((prev) => [newHospital, ...prev]);
+      setActiveHospital(newHospital);
+      setActivePatient(null);
+      setToken(respData.session?.access_token || null);
+      return { success: true, hospital: newHospital };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error during hospital enrollment.' };
+    }
   };
 
   // Hospital Logout
-  const logoutHospital = () => {
-    setActiveHospital(null);
+  const logoutHospital = async () => {
+    try {
+      await supabase.auth.signOut();
+      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    } finally {
+      setActiveHospital(null);
+      setToken(null);
+    }
   };
 
-  // Patient Login — try live backend first, fall back to local roster
-  const loginPatient = async (phone: string, _password?: string) => {
-    const cleanPhone = phone.trim().replace(/\s+/g, '');
+  // Patient Login
+  const loginPatient = async (identifier: string, password?: string) => {
+    if (!password) {
+      return { success: false, message: 'Password is required to sign in.' };
+    }
 
-    // Try backend patient search first
     try {
-      const res = await fetch(`/api/patients/search?phone=${encodeURIComponent(cleanPhone)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const patients: any[] = data.patients || [];
-        const match = patients.find((p: any) =>
-          (p.phone || '').replace(/\s+/g, '').includes(cleanPhone)
-        );
-        if (match) {
-          const livePatient: PatientUser = {
-            patient_id: match.patient_id || match.id || `pat-${Date.now()}`,
-            name: match.name,
-            phone: match.phone,
-            email: match.email,
-            blood_group: match.blood_group || 'O+',
-            age: match.age,
-            gender: match.gender,
-            emergency_contact_name: match.emergency_contact_name,
-            emergency_contact_phone: match.emergency_contact_phone,
-            address: match.address,
-          };
-          // Merge into local roster
-          setAllPatients((prev) => {
-            const exists = prev.find(p => p.patient_id === livePatient.patient_id);
-            return exists ? prev : [livePatient, ...prev];
-          });
-          setActivePatient(livePatient);
-          return { success: true };
-        }
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: identifier.trim(),
+          password,
+          role: 'patient',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, message: data.message || 'Invalid credentials.' };
       }
-    } catch {
-      // Backend unavailable — fall through to local
-    }
 
-    // Fall back to local patient roster
-    const found = allPatients.find((p) => p.phone.replace(/\s+/g, '').includes(cleanPhone));
-    if (found) {
-      setActivePatient(found);
+      if (data.session) {
+        await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+      }
+
+      const patient: PatientUser = {
+        patient_id: data.user.id || data.user.user_id,
+        name: data.user.name,
+        phone: data.user.phone,
+        email: data.user.email,
+        blood_group: data.user.profile?.blood_group || 'O+',
+        age: data.user.profile?.age || 28,
+        gender: data.user.profile?.gender || 'Female',
+        emergency_contact_name: data.user.profile?.emergency_contact_name,
+        emergency_contact_phone: data.user.profile?.emergency_contact_phone,
+        address: data.user.profile?.address,
+      };
+
+      setActivePatient(patient);
+      setActiveHospital(null);
+      setToken(data.token || data.session?.access_token);
       return { success: true };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error during patient login.' };
     }
-
-    return {
-      success: false,
-      message: 'No patient record found for this mobile number. Please sign up to register.',
-    };
   };
 
   // Patient Sign Up
   const signupPatient = async (data: SignupPatientPayload) => {
-    const newId = `pat-${Date.now()}`;
-    const newPatient: PatientUser = {
-      patient_id: newId,
-      name: data.name.trim(),
-      phone: data.phone.trim(),
-      email: data.email?.trim(),
-      blood_group: data.blood_group || 'O+',
-      age: data.age || 30,
-      gender: data.gender || 'Not Specified',
-      emergency_contact_name: data.emergency_contact_name,
-      emergency_contact_phone: data.emergency_contact_phone,
-      address: data.address,
-    };
+    const email = data.email?.trim();
+    const password = data.password;
 
-    if (isLiveSupabase) {
-      try {
-        await supabase.from('patients').insert([
-          {
-            name: newPatient.name,
-            phone: newPatient.phone,
-            email: newPatient.email,
-            consent_status: true,
-          },
-        ]);
-      } catch (err) {
-        console.warn('Supabase remote patient insert fallback to local', err);
-      }
+    if (!email || !email.includes('@')) {
+      return { success: false, message: 'A valid email address is required.' };
+    }
+    if (!password || password.length < 6) {
+      return { success: false, message: 'Password must be at least 6 characters.' };
     }
 
-    setAllPatients((prev) => [newPatient, ...prev]);
-    setActivePatient(newPatient);
-    return { success: true, patient: newPatient };
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          role: 'patient',
+          name: data.name.trim(),
+          phone: data.phone.trim(),
+          blood_group: data.blood_group || 'O+',
+          age: data.age,
+          gender: data.gender,
+          emergency_contact_name: data.emergency_contact_name,
+          emergency_contact_phone: data.emergency_contact_phone,
+          address: data.address,
+        }),
+      });
+
+      const respData = await res.json();
+      if (!res.ok) {
+        return { success: false, message: respData.message || 'Patient registration failed.' };
+      }
+
+      if (respData.session) {
+        await supabase.auth.setSession({
+          access_token: respData.session.access_token,
+          refresh_token: respData.session.refresh_token,
+        });
+      }
+
+      const newPatient: PatientUser = {
+        patient_id: respData.user.id,
+        name: respData.user.name,
+        phone: respData.user.phone,
+        email,
+        blood_group: data.blood_group || 'O+',
+        age: data.age || 28,
+        gender: data.gender || 'Female',
+        emergency_contact_name: data.emergency_contact_name,
+        emergency_contact_phone: data.emergency_contact_phone,
+        address: data.address,
+      };
+
+      setActivePatient(newPatient);
+      setActiveHospital(null);
+      setToken(respData.session?.access_token || null);
+      return { success: true, patient: newPatient };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error during patient registration.' };
+    }
   };
 
   // Patient Logout
-  const logoutPatient = () => {
-    setActivePatient(null);
+  const logoutPatient = async () => {
+    try {
+      await supabase.auth.signOut();
+      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    } finally {
+      setActivePatient(null);
+      setToken(null);
+    }
   };
 
   return (
@@ -425,6 +524,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activeHospital,
         activePatient,
         allHospitals,
+        token,
+        isLoadingAuth,
         loginHospital,
         signupHospital,
         logoutHospital,
@@ -436,6 +537,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authModalConfig,
         openAuthModal,
         closeAuthModal,
+        getAuthHeader,
       }}
     >
       {children}
