@@ -25,6 +25,7 @@ import {
   RefreshCw,
   QrCode,
   Users,
+  Activity,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QrCodeModal } from '../components/QrCodeModal';
@@ -1149,35 +1150,6 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
             Multilingual Voice AI Receptionist
           </h1>
         </div>
-
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2 bg-paper-subtle px-3 py-1.5 rounded-lg border border-rule">
-            <span className="text-xs font-mono text-ink-muted font-medium">Language:</span>
-            <select
-              value={selectedLanguage}
-onChange={(e) => {
-                const nextLang = e.target.value as any;
-                handleLanguageChange(nextLang);
-                if (isSpeaking) handleStopSpeaking();
-                const greetings: Record<string, string> = {
-                  'en-IN': 'Hello! Welcome to Yashoda Hospital MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.',
-                  'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
-                  'ta-IN': 'வணக்கம்! மெட்கனெக்ட் ஏஐ வரவேற்பாளருக்கு வரவேற்கிறோம். மருத்துவர் சந்திப்பை பதிவு செய்ய பேசவும் அல்லது தட்டச்சு செய்யவும்.',
-                  'te-IN': 'నమస్కారం! మెడ్‌కనెక్ట్ ఏఐ రిసెప్షనిస్ట్‌కు స్వాగతం. డాక్టర్ అపాయింట్‌మెంట్ బుక్ చేయడానికి మాట్లాడండి లేదా టైప్ చేయండి.',
-                };
-                if (Object.values(greetings).includes(aiSpeechMessage) || !aiSpeechMessage) {
-                  setAiSpeechMessage(greetings[nextLang] || greetings['en-IN']);
-                }
-              }}
-              className="pulse-select text-xs font-mono font-semibold py-1 px-2 text-accent border-rule bg-paper-2"
-            >
-              <option value="en-IN">English (en-IN)</option>
-              <option value="hi-IN">Hindi (hi-IN)</option>
-              <option value="ta-IN">Tamil (ta-IN)</option>
-              <option value="te-IN">Telugu (te-IN)</option>
-            </select>
-          </div>
-        </div>
       </div>
 
       {/* Patient Account Context Strip */}
@@ -1307,15 +1279,6 @@ onChange={(e) => {
                 </span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => onBackToHome ? onBackToHome() : window.scrollTo({ top: 0, behavior: 'smooth' })}
-                className="flex items-center space-x-1.5 text-xs sm:text-sm font-semibold text-ink-muted hover:text-accent transition-colors cursor-pointer py-1 px-2.5 rounded-lg hover:bg-paper-subtle"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Back to Home</span>
-              </button>
-
               <div className="relative">
                 <select
                   value={selectedLanguage}
@@ -1331,32 +1294,26 @@ onChange={(e) => {
               </div>
             </div>
 
-            {/* Main Stage: Glowing Mic Button, Title & Language Pills (Image 1) */}
+            {/* Main Stage: Glowing Mic Button, Title & Language Pills */}
             <div className="flex flex-col items-center justify-center pt-8 pb-4 text-center">
               
-              {/* Concentric Soft Glowing Ripple Rings around Mic Button */}
+              {/* Wavefront Ripple Rings around Mic Button (Active only when user clicks to record) */}
               <div className="relative flex items-center justify-center my-3">
-                <div className={`absolute w-44 h-44 rounded-full transition-all duration-700 pointer-events-none ${
-                  isRecording
-                    ? 'bg-emergency/10 ring-8 ring-emergency/15 animate-ping'
-                    : isSpeaking
-                    ? 'bg-amber-500/10 ring-8 ring-amber-500/15 animate-pulse'
-                    : 'bg-blue-500/5 ring-8 ring-blue-500/10'
-                }`} />
-                <div className={`absolute w-36 h-36 rounded-full transition-all pointer-events-none ${
-                  isRecording
-                    ? 'bg-emergency/15'
-                    : isSpeaking
-                    ? 'bg-amber-500/15'
-                    : 'bg-blue-500/10'
-                }`} />
-                <div className={`absolute w-28 h-28 rounded-full transition-all pointer-events-none ${
-                  isRecording
-                    ? 'bg-emergency/20'
-                    : isSpeaking
-                    ? 'bg-amber-500/20'
-                    : 'bg-blue-500/15'
-                }`} />
+                <AnimatePresence>
+                  {isRecording && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      transition={{ duration: 0.2 }}
+                      className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                    >
+                      <div className="absolute w-44 h-44 rounded-full bg-emergency/10 ring-8 ring-emergency/15 animate-ping" />
+                      <div className="absolute w-36 h-36 rounded-full bg-emergency/15 animate-pulse" />
+                      <div className="absolute w-28 h-28 rounded-full bg-emergency/20" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {/* Central Interactive Mic Button */}
                 <motion.button
@@ -1475,18 +1432,26 @@ onChange={(e) => {
               </div>
             </div>
 
-            {/* Live Transcript Output & Playback Controls (Image 2) */}
+            {/* Live Transcript Output & Playback Controls */}
             <div className="mt-4 space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
-                  STT Normalized Transcript:
-                </label>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                  <label className="text-xs font-bold text-ink tracking-wide font-display">
+                    Transcript
+                  </label>
+                  {isRecording && (
+                    <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-emergency/10 text-emergency border border-emergency/20 animate-pulse">
+                      Live
+                    </span>
+                  )}
+                </div>
                 {aiSpeechMessage && (
                   <button
                     type="button"
                     onClick={handleReplayVoice}
                     disabled={isSpeaking || isRecording}
-                    className="flex items-center space-x-1 text-xs font-medium text-accent hover:underline disabled:opacity-50 cursor-pointer"
+                    className="flex items-center space-x-1.5 text-xs font-semibold text-accent hover:text-accent-hover transition-colors disabled:opacity-50 cursor-pointer px-2 py-0.5 rounded-lg hover:bg-accent/5"
                     title="Replay AI Speech"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -1494,7 +1459,7 @@ onChange={(e) => {
                   </button>
                 )}
               </div>
-              <div className="p-4 bg-paper-2 rounded-2xl border border-rule font-mono text-xs sm:text-sm text-ink min-h-[58px] flex items-center shadow-xs">
+              <div className="p-4 bg-paper-subtle/70 rounded-2xl border border-rule/80 text-xs sm:text-sm text-ink min-h-[58px] flex items-center shadow-xs">
                 <AnimatePresence mode="wait">
                   <motion.span
                     key={transcript || 'placeholder'}
@@ -1502,9 +1467,10 @@ onChange={(e) => {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: motionTokens.duration.fast }}
+                    className="leading-relaxed"
                   >
                     {transcript || (
-                      <span className="text-ink-muted">"Speaking or typing will trigger GPT-4o-mini administrative intent parsing..."</span>
+                      <span className="text-ink-muted italic">"Speaking or typing will trigger GPT-4o-mini administrative intent parsing..."</span>
                     )}
                   </motion.span>
                 </AnimatePresence>
@@ -1657,11 +1623,17 @@ onChange={(e) => {
           <div className="pulse-card p-6 rounded-2xl bg-paper-2 border border-rule shadow-sm space-y-6">
             
             {/* Header with Emergency Toggle */}
-            <div className="flex items-center justify-between pb-3 border-b border-rule-subtle">
-              <h3 className="text-base font-bold text-ink flex items-center space-x-2">
-                <Calendar className="w-4 h-4 text-accent" />
-                <span>Doctor Routing & Verified OPD Slots</span>
-              </h3>
+            <div className="flex items-center justify-between pb-4 border-b border-rule-subtle">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center text-accent shrink-0">
+                  <Calendar className="w-4 h-4 text-accent" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-ink tracking-tight font-display">
+                    Doctor Routing & Verified OPD Slots
+                  </h3>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -1669,10 +1641,10 @@ onChange={(e) => {
                   setEmergencyFallback(null);
                   setSpeechError(null);
                 }}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                   isEmergencyMode
                     ? 'bg-emergency text-white shadow-sm ring-2 ring-emergency/30'
-                    : 'bg-paper-subtle border border-rule text-ink-2 hover:border-emergency hover:text-emergency'
+                    : 'bg-emergency/5 border border-emergency/20 text-emergency hover:bg-emergency/10 hover:border-emergency/40'
                 }`}
                 title="Toggle Emergency Mode for one-click doctor allocation"
               >
@@ -1703,11 +1675,14 @@ onChange={(e) => {
 
             {/* 1. Department Selection */}
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold text-ink uppercase tracking-wider">
-                  1. Select Department:
-                </label>
-                <span className="text-[11px] font-medium text-ink-muted">
+              <div className="flex items-center justify-between mb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-accent/10 text-accent font-bold text-[11px] flex items-center justify-center shrink-0">1</span>
+                  <label className="text-xs font-bold text-ink uppercase tracking-wider">
+                    Select Department:
+                  </label>
+                </div>
+                <span className="text-[11px] font-semibold text-ink-muted bg-paper-subtle px-2.5 py-0.5 rounded-md border border-rule">
                   {displayDepartments.length} Medical Specialties
                 </span>
               </div>
@@ -1721,15 +1696,20 @@ onChange={(e) => {
                       key={dept}
                       type="button"
                       onClick={() => handleSelectDepartment(dept)}
-                      className={`py-2.5 px-3.5 text-xs sm:text-sm rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                      className={`py-3 px-3.5 text-xs sm:text-sm rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer font-medium ${
                         isSelected
-                          ? 'bg-accent-light/50 border-accent text-accent font-bold shadow-xs ring-2 ring-accent/20'
+                          ? 'bg-accent/10 border-accent text-accent font-bold shadow-xs ring-2 ring-accent/20'
                           : 'bg-paper-2 border-rule text-ink hover:border-accent/40 hover:bg-paper-subtle'
                       }`}
                     >
-                      <span>{dept}</span>
-                      {isSelected && (
+                      <div className="flex items-center gap-2">
+                        <Activity className={`w-3.5 h-3.5 ${isSelected ? 'text-accent' : 'text-ink-muted'}`} />
+                        <span>{dept}</span>
+                      </div>
+                      {isSelected ? (
                         <span className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />
+                      ) : (
+                        <span className="w-1.5 h-1.5 rounded-full bg-transparent shrink-0" />
                       )}
                     </motion.button>
                   );
@@ -1776,11 +1756,14 @@ onChange={(e) => {
               <>
                 {/* 2. Real Doctor Selection */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
-                      2. Select Doctor ({selectedDepartment}):
-                    </label>
-                    <span className="text-[11px] font-medium text-ink-muted">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-accent/10 text-accent font-bold text-[11px] flex items-center justify-center shrink-0">2</span>
+                      <label className="text-xs font-bold text-ink uppercase tracking-wider">
+                        Select Doctor ({selectedDepartment}):
+                      </label>
+                    </div>
+                    <span className="text-[11px] font-semibold text-ink-muted bg-paper-subtle px-2.5 py-0.5 rounded-md border border-rule">
                       {loadingDoctors ? 'Loading...' : `${departmentDoctors.length} Specialists`}
                     </span>
                   </div>
@@ -1794,42 +1777,55 @@ onChange={(e) => {
                     <div className="space-y-2.5">
                       {departmentDoctors.map((doc) => {
                         const isSelected = selectedDoctorId === doc.doctor_id;
+                        const initials = doc.name
+                          ? doc.name.replace(/^Dr\.?\s+/i, '').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()
+                          : 'DR';
                         return (
                           <motion.div
                             key={doc.doctor_id}
-                            whileHover={{ scale: 1.01 }}
+                            whileHover={{ scale: 1.008 }}
                             whileTap={{ scale: 0.99 }}
                             onClick={() => handleSelectDoctor(doc.doctor_id)}
                             className={`p-3.5 sm:p-4 rounded-xl border cursor-pointer transition-all ${
                               isSelected
-                                ? 'bg-accent-light/40 border-accent shadow-xs ring-2 ring-accent/20'
-                                : 'bg-paper-subtle border-rule hover:border-accent/40 hover:bg-paper-2'
+                                ? 'bg-accent/5 border-accent shadow-xs ring-2 ring-accent/20'
+                                : 'bg-paper-2 border-rule hover:border-accent/40 hover:bg-paper-subtle'
                             }`}
                           >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <h4 className={`text-sm font-bold ${isSelected ? 'text-accent' : 'text-ink'}`}>
-                                    {doc.name}
-                                  </h4>
-                                  {isSelected && (
-                                    <span className="px-2 py-0.5 rounded-full bg-accent text-white text-[10px] font-bold">
-                                      Selected
-                                    </span>
-                                  )}
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3 flex-1 min-w-0">
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${
+                                  isSelected ? 'bg-accent text-white shadow-xs' : 'bg-paper-subtle border border-rule text-accent font-bold'
+                                }`}>
+                                  {initials}
                                 </div>
-                                <p className="text-xs text-ink-2 font-medium mt-0.5">
-                                  {doc.specialization || doc.specialty || doc.department_name}
-                                </p>
-                                <div className="flex items-center gap-3 mt-1.5 text-xs text-ink-muted">
-                                  <span>Room: <strong className="text-ink font-semibold">{doc.room_number || 'OPD 101'}</strong></span>
-                                  <span>·</span>
-                                  <span>Fee: <strong className="text-ink font-semibold">₹{doc.consultation_fee || 500}</strong></span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <h4 className={`text-sm font-bold truncate ${isSelected ? 'text-accent' : 'text-ink'}`}>
+                                      {doc.name}
+                                    </h4>
+                                    {isSelected && (
+                                      <span className="px-2 py-0.5 rounded-full bg-accent text-white text-[10px] font-bold shrink-0">
+                                        Selected
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-ink-2 font-medium mt-0.5 truncate">
+                                    {doc.specialization || doc.specialty || doc.department_name}
+                                  </p>
+                                  <div className="flex items-center gap-2 mt-2 text-xs">
+                                    <span className="px-2 py-0.5 rounded-md bg-paper-subtle border border-rule text-ink-muted">
+                                      Room: <strong className="text-ink font-semibold">{doc.room_number || 'OPD 101'}</strong>
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-md bg-paper-subtle border border-rule text-ink-muted">
+                                      Fee: <strong className="text-ink font-semibold">₹{doc.consultation_fee || 500}</strong>
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                               <div className="text-right shrink-0">
-                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                                   Live Slots
                                 </span>
                               </div>
@@ -1847,11 +1843,14 @@ onChange={(e) => {
 
                 {/* 3. Date Selection */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
-                      3. Select Appointment Date:
-                    </label>
-                    <div className="flex items-center gap-1 text-xs font-semibold text-accent">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-accent/10 text-accent font-bold text-[11px] flex items-center justify-center shrink-0">3</span>
+                      <label className="text-xs font-bold text-ink uppercase tracking-wider">
+                        Select Appointment Date:
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/5 px-2.5 py-1 rounded-lg border border-accent/20">
                       <Calendar className="w-3.5 h-3.5" />
                       <span>{formatDisplayDate(selectedDate)}</span>
                     </div>
@@ -1867,14 +1866,14 @@ onChange={(e) => {
                           key={item.iso}
                           type="button"
                           onClick={() => handleSelectDate(item.iso)}
-                          className={`flex-shrink-0 px-3.5 py-2 rounded-xl border text-center transition-all cursor-pointer ${
+                          className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl border text-center transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-accent border-accent text-white font-bold shadow-sm ring-2 ring-accent/20'
                               : 'bg-paper-2 border-rule text-ink hover:border-accent/40 hover:bg-paper-subtle'
                           }`}
                         >
-                          <div className="text-xs font-semibold">{item.label}</div>
-                          <div className={`text-[10px] mt-0.5 ${isSelected ? 'text-white/80' : 'text-ink-muted'}`}>
+                          <div className="text-xs font-bold">{item.label}</div>
+                          <div className={`text-[10px] font-medium mt-0.5 ${isSelected ? 'text-white/80' : 'text-ink-muted'}`}>
                             {item.subLabel}
                           </div>
                         </motion.button>
@@ -1897,34 +1896,36 @@ onChange={(e) => {
                           handleSelectDate(e.target.value);
                         }
                       }}
-                      className="bg-paper-2 border border-rule rounded-lg px-2.5 py-1 text-xs font-medium text-ink focus:outline-none focus:border-accent"
+                      className="bg-paper-2 border border-rule rounded-lg px-2.5 py-1 text-xs font-semibold text-ink focus:outline-none focus:border-accent"
                     />
                   </div>
                 </div>
 
                 {/* 4. Slot Selection with Available vs Booked distinction */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
-                      4. Select Time Slot:
-                    </label>
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-accent/10 text-accent font-bold text-[11px] flex items-center justify-center shrink-0">4</span>
+                      <label className="text-xs font-bold text-ink uppercase tracking-wider">
+                        Select Time Slot:
+                      </label>
+                    </div>
                     <div className="flex items-center gap-2 text-xs">
                       {loadingSlots ? (
                         <span className="text-ink-muted flex items-center gap-1 font-medium">
                           <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" /> Loading slots...
                         </span>
                       ) : (
-                        <span className="text-ink-muted flex items-center gap-2 font-medium">
-                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <div className="flex items-center gap-2 font-medium">
+                          <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20 text-[11px] font-bold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                             {slotCounts.available} Available
                           </span>
-                          <span>·</span>
-                          <span className="inline-flex items-center gap-1 text-ink-muted">
+                          <span className="inline-flex items-center gap-1 text-ink-muted bg-paper-subtle px-2.5 py-0.5 rounded-full border border-rule text-[11px]">
                             <Lock className="w-3 h-3" />
                             {slotCounts.booked} Booked
                           </span>
-                        </span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1960,22 +1961,23 @@ onChange={(e) => {
                                 setSelectedSlotId(slot.slot_id);
                               }
                             }}
-                            className={`py-2.5 px-2 text-xs rounded-xl border text-center transition-all tabular-nums relative cursor-pointer ${
+                            className={`py-3 px-2 text-xs rounded-xl border text-center transition-all tabular-nums relative cursor-pointer ${
                               !isAvailable
-                                ? 'bg-paper-subtle/80 border-dashed border-rule text-ink-muted/50 cursor-not-allowed line-through select-none'
+                                ? 'bg-paper-subtle/70 border-dashed border-rule text-ink-muted/50 cursor-not-allowed select-none'
                                 : isSelected
-                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-200 font-bold shadow-xs ring-2 ring-emerald-500/30'
-                                : 'bg-paper-2 border-rule text-ink hover:border-emerald-500/50 hover:bg-paper-subtle'
+                                ? 'bg-emerald-500/15 border-emerald-500 text-emerald-900 dark:text-emerald-100 font-bold shadow-xs ring-2 ring-emerald-500/30'
+                                : 'bg-paper-2 border-rule text-ink hover:border-emerald-500/50 hover:bg-emerald-500/5'
                             }`}
                           >
-                            <div className="font-bold text-xs sm:text-sm">{slot.display_time}</div>
-                            <div className="text-[10px] mt-0.5">
+                            <div className="font-bold text-xs sm:text-sm tracking-tight">{slot.display_time}</div>
+                            <div className="text-[10px] mt-1">
                               {isAvailable ? (
-                                <span className={isSelected ? 'text-emerald-700 dark:text-emerald-300 font-bold' : 'text-emerald-600 dark:text-emerald-400 font-medium'}>
-                                  ● Open
+                                <span className={isSelected ? 'text-emerald-700 dark:text-emerald-300 font-bold flex items-center justify-center gap-1' : 'text-emerald-600 dark:text-emerald-400 font-semibold flex items-center justify-center gap-1'}>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  Open
                                 </span>
                               ) : (
-                                <span className="text-ink-muted flex items-center justify-center gap-0.5">
+                                <span className="text-ink-muted/60 flex items-center justify-center gap-1 line-through">
                                   <Lock className="w-2.5 h-2.5" /> Booked
                                 </span>
                               )}
@@ -2016,17 +2018,18 @@ onChange={(e) => {
               <motion.div
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3.5 bg-accent-light/40 rounded-xl border border-accent/30 space-y-1.5"
+                className="p-4 bg-accent/5 rounded-xl border border-accent/20 space-y-2"
               >
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-ink-muted font-medium">Booking Selection:</span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                  <span className="text-ink-muted font-semibold uppercase tracking-wider text-[10px]">Booking Selection:</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                     Ready to Book
                   </span>
                 </div>
                 <div className="text-xs sm:text-sm text-ink font-bold flex items-center justify-between">
                   <span>{currentDoctor.name} ({currentDoctor.department_name})</span>
-                  <span className="text-accent font-extrabold">₹{currentDoctor.consultation_fee || 500}</span>
+                  <span className="text-accent font-extrabold text-sm">₹{currentDoctor.consultation_fee || 500}</span>
                 </div>
                 <div className="text-xs text-ink-2 flex items-center gap-2 font-medium">
                   <Calendar className="w-3.5 h-3.5 text-accent" />
@@ -2041,14 +2044,14 @@ onChange={(e) => {
             )}
 
             {/* 6. Action Button: Book & Generate Token */}
-            <div className="pt-2">
+            <div className="pt-2 space-y-3">
               {isEmergencyMode ? (
                 <motion.button
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={handleEmergencyBookSlot}
                   disabled={isEmergencyBooking}
-                  className="w-full py-3.5 px-4 rounded-xl text-xs sm:text-sm bg-emergency hover:bg-emergency/90 text-white font-bold shadow-md flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                  className="w-full py-4 px-4 rounded-xl text-xs sm:text-sm bg-emergency hover:bg-emergency/90 text-white font-bold shadow-md shadow-emergency/20 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-all"
                 >
                   {isEmergencyBooking ? (
                     <span className="flex items-center justify-center gap-2">
@@ -2070,7 +2073,7 @@ onChange={(e) => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleBookSlot}
                     disabled={isBooking || !currentDoctor || !selectedSlot}
-                    className="pulse-btn pulse-btn-primary w-full py-3.5 rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    className="w-full py-4 px-4 rounded-xl text-xs sm:text-sm font-bold shadow-md flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-all bg-accent hover:bg-accent-hover text-white shadow-accent/25"
                   >
                     {isBooking ? (
                       <span className="flex items-center justify-center gap-2">
@@ -2094,7 +2097,7 @@ onChange={(e) => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleEmergencyBookSlot}
                     disabled={isEmergencyBooking}
-                    className="mt-3 w-full py-2.5 px-4 rounded-xl text-xs sm:text-sm bg-emergency/10 hover:bg-emergency text-emergency hover:text-white border border-emergency/40 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shadow-xs"
+                    className="w-full py-3 px-4 rounded-xl text-xs sm:text-sm bg-emergency/5 hover:bg-emergency text-emergency hover:text-white border border-emergency/30 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shadow-xs"
                     title="Direct 1-click allocation of earliest available emergency slot"
                   >
                     <Zap className="w-3.5 h-3.5" />
