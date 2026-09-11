@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "n8n": {
+      "serverUrl": "https://test-medconnect.app.n8n.cloud/mcp-server/http",
+      "httpUrl": "https://test-medconnect.app.n8n.cloud/mcp-server/http"
+    }
+  }
+}

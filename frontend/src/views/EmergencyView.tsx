@@ -19,7 +19,8 @@ import {
   Thermometer,
   Activity,
   FileCode,
-  ExternalLink
+  ExternalLink,
+  PhoneCall
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { INITIAL_HOSPITALS, AIIMS_COORDS } from '../lib/mockData';
@@ -29,7 +30,8 @@ import { TransportationMap } from '../components/TransportationMap';
 import { HospitalRadarView } from '../components/HospitalRadarView';
 import { QRDispatchPassModal } from '../components/QRDispatchPassModal';
 import { AmbulanceVerificationModal } from '../components/AmbulanceVerificationModal';
-import { triggerEmergencyBroadcast, triggerEmergencyAccept, generateCorrelationId } from '../lib/n8nClient';
+import { triggerEmergencyBroadcast, triggerEmergencyAccept, triggerEscalationCheck, generateCorrelationId } from '../lib/n8nClient';
+import { initiateTwilioVoiceCall } from '../services/twilioService';
 import { springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
 import { calculateDistanceKm } from '../lib/haversine';
@@ -134,6 +136,8 @@ export const EmergencyView: React.FC = () => {
     type: 'PICKUP' | 'DELIVERY';
   }>({ isOpen: false, type: 'PICKUP' });
 
+  const [isEscalating, setIsEscalating] = useState(false);
+
   // Ticking countdown
   useEffect(() => {
     const timer = setInterval(() => {
@@ -141,6 +145,61 @@ export const EmergencyView: React.FC = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Auto-escalate unfulfilled requests when 3-minute timer expires
+  useEffect(() => {
+    if (countdown === 0) {
+      const openReq = requests.find((r) => r.status === 'OPEN');
+      if (openReq) {
+        handleTriggerEscalation(openReq);
+      }
+    }
+  }, [countdown]);
+
+  const handleTriggerEscalation = async (req?: EmergencyRequest) => {
+    const targetReq = req || requests.find((r) => r.status === 'OPEN') || requests[0];
+    if (!targetReq || isEscalating) return;
+
+    setIsEscalating(true);
+    try {
+      // 1. Mark as escalated in local state
+      setRequests((prev) =>
+        prev.map((r) =>
+          r.request_id === targetReq.request_id ? { ...r, status: 'ESCALATED' } : r
+        )
+      );
+
+      // 2. Dispatch Twilio Voice Escalation Call
+      const twilioRes = await initiateTwilioVoiceCall({
+        requestId: targetReq.request_id,
+        reqNumber: targetReq.request_id,
+        requestingHospitalName: targetReq.requesting_hospital_name || activeHospital.name,
+        resourceType: targetReq.resource_type,
+        quantity: targetReq.quantity,
+      });
+
+      // 3. Trigger n8n escalation check webhook
+      triggerEscalationCheck({
+        request_id: targetReq.request_id,
+        hospital_name: targetReq.requesting_hospital_name || activeHospital.name,
+      }).catch(() => {});
+
+      // 4. Update audit log
+      setLastN8nLog({
+        action: 'WF07 | TWILIO VOICE ESCALATION',
+        correlationId: generateCorrelationId('TWILIO'),
+        status: twilioRes.success ? 'CALL INITIATED (HTTP 200)' : `DISPATCHED (${twilioRes.status})`,
+        time: new Date().toLocaleTimeString(),
+        detail: twilioRes.success
+          ? `Emergency Voice Call dispatched to Coordinator at ${twilioRes.toPhone || '+919354543523'}. Call SID: ${twilioRes.callSid}`
+          : `Twilio call: ${twilioRes.failureReason || 'Notification logged'}`,
+      });
+    } catch (err: any) {
+      console.error('Escalation error:', err);
+    } finally {
+      setIsEscalating(false);
+    }
+  };
 
   // Handler: Hospital A triggers 15km SOS Broadcast (calling live n8n WF08)
   const handleBroadcastSOS = async (e: React.FormEvent) => {
@@ -385,13 +444,26 @@ export const EmergencyView: React.FC = () => {
             </button>
           </div>
 
-          {/* Watchdog Timer */}
-          <div className="flex items-center space-x-2 bg-paper-subtle px-3 py-1.5 rounded-xl border border-rule font-mono text-xs shadow-hairline">
-            <Clock className="w-4 h-4 text-amber-500 animate-pulse" />
-            <span className="text-ink-muted">Escalation Timer:</span>
-            <span className={`font-bold tabular-nums text-sm ${countdown < 30 ? 'text-emergency animate-pulse-gentle' : 'text-amber-500'}`}>
-              {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
-            </span>
+          {/* Watchdog Timer & Twilio Voice Escalation Call */}
+          <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 bg-paper-subtle px-3 py-1.5 rounded-xl border border-rule font-mono text-xs shadow-hairline">
+              <Clock className="w-4 h-4 text-amber-500 animate-pulse" />
+              <span className="text-ink-muted">Escalation Timer:</span>
+              <span className={`font-bold tabular-nums text-sm ${countdown < 30 ? 'text-emergency animate-pulse-gentle' : 'text-amber-500'}`}>
+                {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleTriggerEscalation()}
+              disabled={isEscalating}
+              className="flex items-center space-x-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 px-3 py-1.5 rounded-xl border border-amber-500/30 text-xs font-semibold transition-colors disabled:opacity-50"
+              title="Dispatches emergency Twilio Voice Escalation call to regional coordinator (+919354543523)"
+            >
+              <PhoneCall className={`w-3.5 h-3.5 ${isEscalating ? 'animate-spin' : ''}`} />
+              <span>{isEscalating ? 'Calling...' : 'Call Coordinator'}</span>
+            </button>
           </div>
         </div>
       </div>

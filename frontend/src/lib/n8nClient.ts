@@ -146,3 +146,11 @@ export async function triggerEmergencyBroadcast(payload: N8nBroadcastPayload): P
 export async function triggerEmergencyAccept(payload: N8nAcceptPayload): Promise<N8nAcceptResponse> {
   return postToN8n<N8nAcceptResponse>(N8N_ENDPOINTS.EMERGENCY_ACCEPT, payload);
 }
+
+/**
+ * Trigger WF07: Emergency Escalation Timeout Check
+ */
+export async function triggerEscalationCheck(payload: { request_id: string; hospital_name?: string; [key: string]: any }): Promise<any> {
+  return postToN8n(N8N_ENDPOINTS.ESCALATION_CHECK, payload);
+}
+
