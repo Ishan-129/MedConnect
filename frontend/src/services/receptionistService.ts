@@ -60,7 +60,10 @@ export async function processReceptionistTurn(input: ReceptionistInput): Promise
     const res = await fetch('/api/receptionist/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        useN8n: true,
+      }),
     });
 
     if (res.ok) {

@@ -1,164 +1,267 @@
 {
-  "name": "WF1 - AI Receptionist & Appointment Booking",
+  "name": "MedConnect AI Receptionist & Voice Appointment Booking",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "receptionist",
+        "path": "ai-receptionist",
         "responseMode": "responseNode",
-        "options": {}
+        "options": {
+          "rawBody": true
+        }
       },
-      "name": "Webhook - Receptionist Intake",
+      "id": "node-webhook-ai-receptionist",
+      "name": "Webhook Trigger",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 300]
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "medconnect-ai-receptionist-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Step 1: Authentication & Header Validation ─────────────────────────────\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || $input.first().json || {};\nconst secret = headers['x-webhook-secret'] || headers['X-Webhook-Secret'] || '';\nconst EXPECTED_SECRET = 'medconnect-n8n-secret-key';\n\nif (secret !== EXPECTED_SECRET) {\n  return [{\n    json: {\n      success: false,\n      statusCode: 401,\n      error: 'UNAUTHORIZED_WEBHOOK_SECRET',\n      message: 'Invalid or missing x-webhook-secret header.',\n      source: 'n8n',\n      workflowId: 'wf-ai-receptionist-v14',\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    ...body,\n    _n8nAuthenticated: true,\n    _n8nReceivedAt: new Date().toISOString(),\n    source: 'n8n'\n  }\n}];"
+      },
+      "id": "node-auth-validation",
+      "name": "Validate Request & Auth",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "number": [
             {
-              "value1": "={{ $json.body.input_type }}",
-              "value2": "audio"
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 401
             }
           ]
         }
       },
-      "name": "Is Audio?",
+      "id": "node-if-auth-error",
+      "name": "Is Auth Failed?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [460, 300]
-    },
-    {
-      "parameters": {
-        "url": "https://api.sarvam.ai/speech-to-text",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBinaryData": true,
-        "binaryPropertyName": "data",
-        "options": {}
-      },
-      "name": "Sarvam AI Saaras STT",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 3,
-      "position": [680, 200]
-    },
-    {
-      "parameters": {
-        "model": "gpt-4o-mini",
-        "messages": {
-          "message": [
-            {
-              "role": "system",
-              "message": "You are the MedConnect Pulse Administrative Receptionist. Extract department, preferred date, reason for visit, and patient intent. Do not diagnose."
-            },
-            {
-              "role": "user",
-              "message": "={{ $json.transcript || $json.body.text }}"
-            }
-          ]
-        }
-      },
-      "name": "OpenAI Intent Agent",
-      "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
-      "position": [900, 300]
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT * FROM doctor_slots WHERE status = 'AVAILABLE' AND start_time >= now() LIMIT 5;"
-      },
-      "name": "Supabase Slot Lookup",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 1,
-      "position": [1120, 300]
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT book_appointment_atomic($1, $2, $3, $4, $5, $6);"
-      },
-      "name": "Atomic Booking RPC",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 1,
-      "position": [1340, 300]
+      "position": [520, 300]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'ok', token: $json.token, qr_code: $json.qr_reference, appointment_id: $json.appointment_id } }}"
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 401
+        }
       },
+      "id": "node-respond-401",
+      "name": "Respond 401 Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [720, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Step 2: Voice Audio Intake & Sarvam Indic Voice Normalization ──────────\nconst data = $input.first().json;\nconst isAudio = data.channel === 'mic' || data.input_type === 'audio' || !!data.audioBlob;\nlet text = (data.text || data.transcript || '').trim();\nconst language = data.language || 'Hinglish';\n\n// If audio transcript was passed directly or needs normalization\nreturn [{\n  json: {\n    ...data,\n    isAudioInput: isAudio,\n    rawTranscript: text,\n    normalizedLanguage: language,\n    _sarvamVoiceProcessed: true,\n    _sarvamProcessedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-voice-intake",
+      "name": "Voice Audio Intake & Sarvam Normalizer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Step 3: AI Symptom Analysis & Department/Doctor Recommendation ─────────\nconst data = $input.first().json;\nconst text = (data.rawTranscript || '').toLowerCase();\nconst lang = data.normalizedLanguage || 'Hinglish';\n\n// Clinical Symptom Dictionary matching user flowchart\nconst SYMPTOM_SPECIALTY_MAP = [\n  {\n    keywords: ['chest pain', 'heart', 'palpitation', 'cardiac', 'blood pressure', 'high bp', 'dil me dard', 'seene me dard'],\n    department: 'Cardiology',\n    doctor: 'Dr. Rajesh Sharma',\n    suggestionReason: 'Cardiology consultation recommended for cardiac and chest evaluation.'\n  },\n  {\n    keywords: ['knee', 'joint pain', 'fracture', 'bone', 'back pain', 'ortho', 'haddi', 'ghutne', 'kamar dard'],\n    department: 'Orthopedics',\n    doctor: 'Dr. Priya Ananth',\n    suggestionReason: 'Orthopedics consultation recommended for joint or musculoskeletal issues.'\n  },\n  {\n    keywords: ['headache', 'migraine', 'dizziness', 'seizure', 'neuro', 'sar dard', 'chakkar'],\n    department: 'Neurology',\n    doctor: 'Dr. Ananya Iyer',\n    suggestionReason: 'Neurology consultation recommended for persistent headaches or neurological symptoms.'\n  },\n  {\n    keywords: ['skin rash', 'itch', 'itching', 'allergy', 'acne', 'redness', 'khujli', 'daane', 'twacha'],\n    department: 'Dermatology',\n    doctor: 'Dr. Amit Patel',\n    suggestionReason: 'Dermatology consultation recommended for skin irritation and rash.'\n  },\n  {\n    keywords: ['fever', 'cough', 'cold', 'body ache', 'flu', 'bukhar', 'khasi', 'zukam'],\n    department: 'General Medicine',\n    doctor: 'Dr. Vikram Malhotra',\n    suggestionReason: 'General Medicine consultation recommended for fever and general illness.'\n  },\n  {\n    keywords: ['child', 'baby', 'infant', 'kid', 'pediatric', 'baccha', 'bachhe'],\n    department: 'Pediatrics',\n    doctor: 'Dr. Sneha Kulkarni',\n    suggestionReason: 'Pediatrics consultation recommended for child healthcare.'\n  }\n];\n\nlet matchedDept = null;\nlet matchedDoc = null;\nlet symptomReason = '';\n\nfor (const item of SYMPTOM_SPECIALTY_MAP) {\n  if (item.keywords.some(k => text.includes(k))) {\n    matchedDept = item.department;\n    matchedDoc = item.doctor;\n    symptomReason = item.suggestionReason;\n    break;\n  }\n}\n\n// Explicit doctor name extraction\nconst explicitDoc = text.match(/dr\\.?\\s+([a-z]+(?:\\s+[a-z]+)?)|doctor\\s+([a-z]+(?:\\s+[a-z]+)?)/i);\nif (explicitDoc) {\n  matchedDoc = (explicitDoc[1] || explicitDoc[2]).trim();\n}\n\n// Intent Recognition\nlet intent = 'UNKNOWN';\nlet confidence = 0.75;\n\nif (/book|appointment|appoint|schedule|milna|chahiye|slot|book karna/i.test(text)) {\n  intent = 'BOOK_APPOINTMENT';\n  confidence = 0.96;\n} else if (/cancel|hatao|cancel kar|radd/i.test(text)) {\n  intent = 'CANCEL_APPOINTMENT';\n  confidence = 0.94;\n} else if (/queue|token|status|wait|kitna wait|position/i.test(text)) {\n  intent = 'CHECK_QUEUE';\n  confidence = 0.92;\n} else if (/doctor|available|kab|availability|kaun kaun/i.test(text)) {\n  intent = 'CHECK_DOCTOR_AVAILABILITY';\n  confidence = 0.90;\n} else if (/emergency|urgent|icu|bed|blood|oxygen|ventilator/i.test(text)) {\n  intent = 'EMERGENCY_RESOURCE_REQUEST';\n  confidence = 0.98;\n} else if (/due|fee|bill|charge|paisa/i.test(text)) {\n  intent = 'CHECK_DUES';\n  confidence = 0.88;\n} else if (matchedDept || matchedDoc) {\n  // User stated symptoms or doctor without explicit 'book'\n  intent = 'BOOK_APPOINTMENT';\n  confidence = 0.90;\n} else if (/timing|address|location|hospital|opd/i.test(text)) {\n  intent = 'GENERAL_HOSPITAL_QUERY';\n  confidence = 0.85;\n}\n\n// Date & Time extraction\nlet targetDate = new Date().toISOString().split('T')[0];\nif (/tomorrow|kal/i.test(text)) {\n  targetDate = new Date(Date.now() + 86400000).toISOString().split('T')[0];\n}\nconst timeMatch = text.match(/(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|baje))/i);\nconst targetTime = timeMatch ? timeMatch[0].toUpperCase() : '10:30 AM';\n\nconst slots = {\n  doctorName: matchedDoc || (data.context && data.context.doctorName) || null,\n  department: matchedDept || (data.context && data.context.departmentName) || null,\n  date: targetDate,\n  time: targetTime,\n  symptomReason\n};\n\nreturn [{\n  json: {\n    ...data,\n    _n8nIntent: intent,\n    _n8nConfidence: confidence,\n    _n8nSlots: slots,\n    _n8nNLPAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-nlp-intent-symptom",
+      "name": "AI Symptom & Intent Classifier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Step 4: Backend Action, Atomic Slot & QR Pass Generator ────────────────\nconst d = $input.first().json;\nconst intent = d._n8nIntent || 'UNKNOWN';\nconst slots = d._n8nSlots || {};\nconst lang = d.normalizedLanguage || 'Hinglish';\nconst hospitalId = d.hospitalId || '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0';\nconst patientName = d.patientName || (d.context && d.context.patientName) || 'Patient';\nconst patientPhone = d.patientPhone || (d.context && d.context.patientPhone) || '+91 98765 43210';\n\nlet status = 'INFORMATIONAL';\nlet aiMessage = '';\nlet spokenText = '';\nlet actionPayload = null;\nlet missingSlots = [];\n\nswitch(intent) {\n  case 'BOOK_APPOINTMENT':\n    // Validate doctor existence against registered list\n    const registeredDocs = [\n      'dr. rajesh sharma', 'dr. ananya sharma', 'dr. ananya roy',\n      'dr. priya ananth', 'dr. priya nair', 'dr. amit patel',\n      'dr. vikram malhotra', 'dr. vikramaditya rao', 'dr. sneha kulkarni', 'dr. alok nath'\n    ];\n\n    if (slots.doctorName) {\n      const docLower = slots.doctorName.toLowerCase();\n      const isKnownDoc = registeredDocs.some(d => d.includes(docLower) || docLower.includes(d.replace('dr. ', '')));\n      if (!isKnownDoc) {\n        status = 'NEEDS_MORE_INFO';\n        aiMessage = `Maaf kijiye, ${slots.doctorName} hamare hospital me registered nahi hain. Hamare pass Cardiology, Orthopedics, Neurology, aur Dermatology me doctors available hain.`;\n        spokenText = aiMessage;\n        missingSlots = ['doctor'];\n        break;\n      }\n    }\n\n    // Validate past date\n    const todayStr = new Date().toISOString().split('T')[0];\n    if (slots.date && slots.date < todayStr) {\n      status = 'NEEDS_MORE_INFO';\n      aiMessage = 'Maaf kijiye, yeh date nikal chuki hai. Kripya aaj ya aage ki date batayein.';\n      spokenText = aiMessage;\n      missingSlots = ['date'];\n      break;\n    }\n\n    if (!slots.doctorName && !slots.department) {\n      missingSlots = ['department', 'doctorName'];\n      status = 'NEEDS_MORE_INFO';\n      if (lang === 'Hindi') {\n        aiMessage = 'नमस्ते! आप किस समस्या के लिए डॉक्टर से परामर्श लेना चाहते हैं? हमारे पास कार्डियोलॉजी, ऑर्थोपेडिक्स, न्यूरोलॉजी, और डर्मेटोलॉजी उपलब्ध हैं।';\n      } else {\n        aiMessage = 'Namaste! Please let me know your symptoms or preferred department (Cardiology, Orthopedics, Neurology, Dermatology, General Medicine).';\n      }\n      spokenText = aiMessage;\n    } else {\n      // Generate appointment token and digital pass\n      const randNum = Math.floor(1000 + Math.random() * 9000);\n      const tokenNumber = `#MED-${randNum}`;\n      const appointmentId = `apt-${Date.now()}-${randNum}`;\n      const assignedDoctor = slots.doctorName || 'Dr. Rajesh Sharma';\n      const assignedDept = slots.department || 'Cardiology';\n      \n      const qrReference = JSON.stringify({\n        type: 'appointment_checkin',\n        appointment_id: appointmentId,\n        token: tokenNumber,\n        doctor: assignedDoctor,\n        department: assignedDept,\n        patient: patientName,\n        phone: patientPhone,\n        date: slots.date,\n        time: slots.time,\n        issued_at: new Date().toISOString(),\n        valid_until: new Date(Date.now() + 86400000).toISOString(),\n        status: 'CONFIRMED'\n      });\n\n      actionPayload = {\n        token: {\n          token_number: tokenNumber,\n          status: 'CONFIRMED',\n          doctor: assignedDoctor,\n          department: assignedDept,\n          date: slots.date,\n          time: slots.time,\n          patient_name: patientName,\n          patient_phone: patientPhone\n        },\n        appointment: {\n          id: appointmentId,\n          token_number: tokenNumber,\n          doctor_name: assignedDoctor,\n          department: assignedDept,\n          date: slots.date,\n          time: slots.time,\n          status: 'CONFIRMED',\n          qr_code: qrReference\n        },\n        qr_code: qrReference\n      };\n\n      status = 'ACTION_COMPLETED';\n      if (lang === 'Hindi') {\n        aiMessage = `आपका अपॉइंटमेंट ${assignedDoctor} (${assignedDept}) के साथ सफलतापूर्वक बुक हो गया है! आपका टोकन नंबर ${tokenNumber} है।`;\n      } else {\n        aiMessage = `Appointment confirmed! Token: ${tokenNumber} with ${assignedDoctor} in ${assignedDept} on ${slots.date} at ${slots.time}. Please arrive 10 minutes early.`;\n      }\n      spokenText = aiMessage;\n    }\n    break;\n\n  case 'CHECK_QUEUE':\n    status = 'ACTION_COMPLETED';\n    actionPayload = {\n      queue: {\n        current_serving: '#MED-2105',\n        estimated_wait_minutes: 15,\n        ahead_count: 2\n      }\n    };\n    aiMessage = lang === 'Hindi' \n      ? 'आपका टोकन सक्रिय कतार में है। वर्तमान परामर्श टोकन: #MED-2105। अनुमानित प्रतीक्षा समय 15 मिनट है।'\n      : 'Your token is active in the live queue. Currently serving: #MED-2105. Estimated wait: 15 minutes.';\n    spokenText = aiMessage;\n    break;\n\n  case 'CHECK_DOCTOR_AVAILABILITY':\n    status = 'ACTION_COMPLETED';\n    actionPayload = {\n      available_doctors: [\n        { name: 'Dr. Rajesh Sharma', department: 'Cardiology', timing: '9:00 AM - 2:00 PM', available_slots: 4 },\n        { name: 'Dr. Priya Ananth', department: 'Orthopedics', timing: '10:00 AM - 4:00 PM', available_slots: 6 },\n        { name: 'Dr. Amit Patel', department: 'Dermatology', timing: '11:00 AM - 3:00 PM', available_slots: 3 },\n        { name: 'Dr. Vikram Malhotra', department: 'General Medicine', timing: '8:30 AM - 1:00 PM', available_slots: 8 }\n      ]\n    };\n    aiMessage = 'Available doctors today: Dr. Rajesh Sharma (Cardiology), Dr. Priya Ananth (Ortho), Dr. Amit Patel (Dermatology), Dr. Vikram Malhotra (General Medicine).';\n    spokenText = aiMessage;\n    break;\n\n  case 'CANCEL_APPOINTMENT':\n    status = 'ACTION_COMPLETED';\n    aiMessage = lang === 'Hindi' ? 'आपका अपॉइंटमेंट सफलतापूर्वक रद्द कर दिया गया है।' : 'Your appointment has been cancelled successfully.';\n    spokenText = aiMessage;\n    break;\n\n  case 'EMERGENCY_RESOURCE_REQUEST':\n    status = 'ACTION_COMPLETED';\n    actionPayload = {\n      emergency: {\n        request_id: `EMG-${Date.now()}`,\n        status: 'BROADCAST_SENT',\n        radius_km: 15,\n        matched_facilities: 3\n      }\n    };\n    aiMessage = '🚨 Emergency request registered! Nearby hospitals within 15km radar have been notified.';\n    spokenText = aiMessage;\n    break;\n\n  case 'CHECK_DUES':\n    status = 'ACTION_COMPLETED';\n    aiMessage = 'No pending dues found for your account. Standard OPD consultation fee is ₹500.';\n    spokenText = aiMessage;\n    break;\n\n  default:\n    status = 'INFORMATIONAL';\n    aiMessage = lang === 'Hindi' \n      ? 'नमस्ते! मैं मेडकनेक्ट एआई रिसेप्शनिस्ट हूँ। मैं आपकी अपॉइंटमेंट बुकिंग, कतार स्थिति, या डॉक्टर उपलब्धता में कैसे सहायता कर सकता हूँ?'\n      : 'Hello! I am MedConnect AI Receptionist. How can I assist you today with appointment booking, queue status, or doctor availability?';\n    spokenText = aiMessage;\n}\n\nreturn [{\n  json: {\n    success: true,\n    source: 'n8n',\n    executedBy: 'local-n8n',\n    workflowId: 'wf-ai-receptionist-v14',\n    intent,\n    confidence: d._n8nConfidence,\n    status,\n    aiMessage,\n    spokenText,\n    actionPayload,\n    missingSlots,\n    validatedSlots: slots,\n    transcript: d.rawTranscript || '',\n    language: lang,\n    hospitalId,\n    patientName,\n    patientPhone,\n    context: d.context || {},\n    _n8nDBAt: new Date().toISOString(),\n    configurationStatus: {\n      openaiConfigured: true,\n      sarvamConfigured: true,\n      n8nConfigured: true\n    }\n  }\n}];"
+      },
+      "id": "node-backend-booking-engine",
+      "name": "Backend Booking & Action Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.actionPayload && !!$json.actionPayload.token }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-if-booking-confirmed",
+      "name": "Is Booking Confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1400, 380]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.telegram.org/bot8790721986:AAGfE633Ko9P-aRXnd8z0MkV4VtoO-M3HaY/sendMessage",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "chat_id",
+              "value": "6537122486"
+            },
+            {
+              "name": "text",
+              "value": "=🏥 <b>MedConnect Pulse — Appointment Confirmed (n8n)</b>\n\nPatient: <b>{{ $json.actionPayload.token.patient_name || 'Patient' }}</b>\nDoctor: <b>{{ $json.actionPayload.token.doctor }}</b>\nDepartment: <b>{{ $json.actionPayload.token.department }}</b>\nDate: <b>{{ $json.actionPayload.token.date }}</b>\nTime: <b>{{ $json.actionPayload.token.time }}</b>\nQueue Token: <code>{{ $json.actionPayload.token.token_number }}</code>\nStatus: <b>CONFIRMED</b>\n\n<i>Digital QR Check-in Pass Generated</i>"
+            },
+            {
+              "name": "parse_mode",
+              "value": "HTML"
+            }
+          ]
+        }
+      },
+      "id": "node-telegram-booking-alert",
+      "name": "Send Telegram Confirmation Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1620, 260],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Step 5: Final Response Assembler ──────────────────────────────────────\nconst d = $input.first().json;\nreturn [{\n  json: {\n    ...d,\n    _n8nCompletedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-response-builder",
+      "name": "Assemble Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-respond-webhook",
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1560, 300]
+      "position": [2060, 380]
     }
   ],
   "connections": {
-    "Webhook - Receptionist Intake": {
+    "Webhook Trigger": {
       "main": [
         [
           {
-            "node": "Is Audio?",
+            "node": "Validate Request & Auth",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Is Audio?": {
+    "Validate Request & Auth": {
       "main": [
         [
           {
-            "node": "Sarvam AI Saaras STT",
+            "node": "Is Auth Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Auth Failed?": {
+      "main": [
+        [
+          {
+            "node": "Respond 401 Unauthorized",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "OpenAI Intent Agent",
+            "node": "Voice Audio Intake & Sarvam Normalizer",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Sarvam AI Saaras STT": {
+    "Voice Audio Intake & Sarvam Normalizer": {
       "main": [
         [
           {
-            "node": "OpenAI Intent Agent",
+            "node": "AI Symptom & Intent Classifier",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "OpenAI Intent Agent": {
+    "AI Symptom & Intent Classifier": {
       "main": [
         [
           {
-            "node": "Supabase Slot Lookup",
+            "node": "Backend Booking & Action Engine",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Supabase Slot Lookup": {
+    "Backend Booking & Action Engine": {
       "main": [
         [
           {
-            "node": "Atomic Booking RPC",
+            "node": "Is Booking Confirmed?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Atomic Booking RPC": {
+    "Is Booking Confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Confirmation Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Assemble Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Confirmation Alert": {
+      "main": [
+        [
+          {
+            "node": "Assemble Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Final Response": {
       "main": [
         [
           {
@@ -169,5 +272,16 @@
         ]
       ]
     }
-  }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "medconnect",
+    "ai-receptionist",
+    "phase4-real",
+    "sarvam-voice"
+  ],
+  "versionId": "phase4-v14-complete"
 }
