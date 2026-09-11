@@ -1,0 +1,75 @@
+{
+  "name": "WF7 - Emergency Escalation Timeout Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emergency-timeout",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - Escalation Check",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM emergency_requests WHERE request_id = $1 AND status = 'OPEN';"
+      },
+      "name": "Check If Still Unaccepted",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "value2": "OPEN"
+            }
+          ]
+        }
+      },
+      "name": "Needs Escalation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "call",
+        "operation": "create",
+        "to": "={{ $env.TWILIO_ESCALATION_TO_NUMBER }}",
+        "from": "={{ $env.TWILIO_FROM_NUMBER }}",
+        "twiml": "<Response><Say voice=\"Polly.Aditi\">Emergency Alert. Hospital {{ $json.requesting_hospital_name }} has an unfulfilled critical request for {{ $json.resource_type }}. Immediate coordinator dispatch required.</Say></Response>"
+      },
+      "name": "Twilio Emergency Voice Call",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE emergency_requests SET status = 'ESCALATED' WHERE request_id = $1; INSERT INTO exceptions (workflow, record_id, error_type, severity, owner, status) VALUES ('WF7_ESCALATION', $1, 'TIMEOUT_UNACCEPTED', 'CRITICAL', 'REGIONAL_COORDINATOR', 'ESCALATED');"
+      },
+      "name": "Log Exception & Mark Escalated",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'escalated', request_id: $json.request_id, call_sid: $json.sid } }}"
+      },
+      "name": "Respond Escalation Triggered",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 200]
+    }
+  ]
+}

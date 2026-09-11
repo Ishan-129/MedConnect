@@ -1,0 +1,154 @@
+name: MedConnect Pulse CI
+
+on:
+  push:
+    branches: [ main, dev, "feat/**", "dev1/**", "dev2/**", "dev3/**" ]
+  pull_request:
+    branches: [ main, dev ]
+
+# Cancel redundant runs on the same branch/PR to save CI minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Job 1: Validate AI Schema & n8n JSON Workflows ───────────────────────
+  validate-contracts:
+    name: 📋 Validate Contracts & JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate intent-schema.json & n8n Workflow JSONs
+        run: |
+          node -e '
+            const fs = require("fs");
+
+            // 1. Validate AI intent schema
+            const schema = JSON.parse(fs.readFileSync("ai-services/intent-schema.json", "utf8"));
+            console.log("✓ ai-services/intent-schema.json is valid JSON");
+
+            // 2. Validate all n8n workflow files
+            if (fs.existsSync("n8n-workflows")) {
+              const files = fs.readdirSync("n8n-workflows").filter(f => f.endsWith(".json"));
+              files.forEach(f => {
+                JSON.parse(fs.readFileSync("n8n-workflows/" + f, "utf8"));
+                console.log("✓ n8n-workflows/" + f + " is valid JSON");
+              });
+              if (files.length === 0) console.log("ℹ n8n-workflows/ contains no JSON files yet.");
+            }
+          '
+
+  # ─── Job 2: Frontend Build (React + Vite) ──────────────────────────────────
+  build-frontend:
+    name: ⚛️  Frontend Build & Typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Dependencies
+        run: npm ci --prefer-offline || npm install
+
+      - name: Production Build
+        run: npm run build
+        env:
+          # Provide placeholder env vars so Vite doesn't fail on undefined keys
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: placeholder-anon-key
+          VITE_N8N_APPOINTMENT_WEBHOOK_URL: http://localhost:5678/webhook/appointment-booking
+          VITE_N8N_EMERGENCY_WEBHOOK_URL: http://localhost:5678/webhook/emergency-broadcast
+          VITE_N8N_STATUS_WEBHOOK_URL: http://localhost:5678/webhook/queue-status
+
+  # ─── Job 3: Backend SQL & Script Linting ───────────────────────────────────
+  lint-backend:
+    name: 🗄️  Backend SQL & Script Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax-check Node.js scripts
+        run: |
+          for script in scripts/*.js; do
+            if [ -f "$script" ]; then
+              node --check "$script"
+              echo "✓ $script syntax OK"
+            fi
+          done
+
+      - name: Verify SQL migration files are non-empty
+        run: |
+          for f in backend/migrations/*.sql backend/seed/*.sql; do
+            if [ -f "$f" ]; then
+              if [ ! -s "$f" ]; then
+                echo "::error file=$f::SQL file '$f' exists but is empty!"
+                exit 1
+              fi
+              echo "✓ $f is non-empty"
+            fi
+          done
+
+  # ─── Job 4: Secret & Credential Scan ──────────────────────────────────────
+  security-scan:
+    name: 🔒 Secret & Credential Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for hardcoded secrets
+        run: |
+          # Patterns: OpenAI keys, JWT tokens, Telegram bot tokens, private keys
+          if grep -rE \
+            "sk-[a-zA-Z0-9]{20,}|eyJhbGciOi|[0-9]{8,10}:[a-zA-Z0-9_-]{35}|-----BEGIN (RSA|OPENSSH|PRIVATE) KEY-----" \
+            --include="*.js" --include="*.ts" --include="*.jsx" --include="*.tsx" \
+            --include="*.json" --include="*.sql" \
+            --exclude-dir={node_modules,.git,dist,build} \
+            --exclude="*.example" \
+            . 2>/dev/null; then
+            echo "::error::⛔ Potential hardcoded secret or API key detected! Remove it before merging."
+            exit 1
+          else
+            echo "✓ Zero hardcoded secrets detected."
+          fi
+
+  # ─── Composite Gatekeeper Job (Bind this in GitHub branch protection) ──────
+  ci-gatekeeper:
+    name: ✅ CI Gatekeeper
+    needs: [validate-contracts, build-frontend, lint-backend, security-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate all CI job results
+        run: |
+          FAILED=0
+          [ "${{ needs.validate-contracts.result }}" != "success" ] && echo "::error::validate-contracts FAILED" && FAILED=1
+          [ "${{ needs.build-frontend.result }}"     != "success" ] && echo "::error::build-frontend FAILED"     && FAILED=1
+          [ "${{ needs.lint-backend.result }}"       != "success" ] && echo "::error::lint-backend FAILED"       && FAILED=1
+          [ "${{ needs.security-scan.result }}"      != "success" ] && echo "::error::security-scan FAILED"      && FAILED=1
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "::error::One or more CI checks failed. Fix the above errors before merging."
+            exit 1
+          fi
+
+          echo "✅ All MedConnect Pulse CI checks passed!"
+

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/healthcheck.js)",
+      "Bash(node scripts/test-concurrency.js)"
+    ]
+  },
+  "env": {
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-opus-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5"
+  }
+}

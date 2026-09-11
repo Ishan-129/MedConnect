@@ -1,0 +1,46 @@
+{
+  "name": "WF3 - Live Queue State Machine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "queue-event",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - Queue State Transition",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE queue_entries SET status = $1 WHERE queue_id = $2 RETURNING *;"
+      },
+      "name": "Update Queue Entry Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH numbered AS (SELECT queue_id, ROW_NUMBER() OVER (ORDER BY check_in_at ASC) as new_pos FROM queue_entries WHERE doctor_id = $1 AND status = 'WAITING') UPDATE queue_entries q SET position = n.new_pos FROM numbered n WHERE q.queue_id = n.queue_id;"
+      },
+      "name": "Recalculate Doctor Positions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ok', updated_id: $json.queue_id, new_status: $json.status } }}"
+      },
+      "name": "Respond Queue Updated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 300]
+    }
+  ]
+}

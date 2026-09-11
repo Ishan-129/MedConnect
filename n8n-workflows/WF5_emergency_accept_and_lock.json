@@ -1,0 +1,45 @@
+{
+  "name": "WF5 - Emergency Accept & Stock Lock",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emergency-accept",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - Telegram / Portal Accept",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT accept_emergency_request($1, $2, $3);"
+      },
+      "name": "Atomic Stock Lock RPC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.QR_SIGNING_SECRET || 'medconnect-secret';\nconst dispatchId = $json.dispatch_id;\nconst reqId = $json.request_id;\nconst issuedAt = new Date().toISOString();\nconst exp = new Date(Date.now() + 60 * 60 * 1000).toISOString();\n\nconst raw = `${dispatchId}:${reqId}:${issuedAt}`;\nconst signature = crypto.createHmac('sha256', secret).update(raw).digest('hex');\n\nreturn { json: { dispatch_id: dispatchId, request_id: reqId, issued_at: issuedAt, exp, signature } };"
+      },
+      "name": "Generate Signed Dispatch Pass",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'accepted_and_locked', dispatch_id: $json.dispatch_id, pass: $json } }}"
+      },
+      "name": "Respond Lock Confirmed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 300]
+    }
+  ]
+}

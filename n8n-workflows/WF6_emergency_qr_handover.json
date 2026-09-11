@@ -1,0 +1,73 @@
+{
+  "name": "WF6 - Emergency QR Handover Checkpoint",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emergency-verify-dispatch",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - QR Scanned at Supplying Hospital",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM dispatches WHERE qr_reference = $1 FOR UPDATE;"
+      },
+      "name": "Check Dispatch Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "value2": "PREPARED"
+            }
+          ]
+        }
+      },
+      "name": "Is Prepared & Unclaimed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dispatches SET status = 'DISPATCHED', verified_at = now() WHERE dispatch_id = $1 RETURNING *;"
+      },
+      "name": "Mark Dispatched",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [920, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'authorized', message: 'Resource release approved for handover to ambulance', dispatch_id: $json.dispatch_id } }}"
+      },
+      "name": "Release Authorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1140, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 409,
+        "responseBody": "={{ { status: 'error', error_code: 'ALREADY_DISPATCHED_OR_INVALID', message: 'This QR code has already been verified or is invalid' } }}"
+      },
+      "name": "Reject Handover",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [920, 420]
+    }
+  ]
+}

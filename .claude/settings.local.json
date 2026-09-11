@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(git -C \"D:/Hacktag-Hackathon\" remote -v)",
+      "Bash(git -C \"D:/Hacktag-Hackathon\" branch -a)",
+      "Bash(git -C \"D:/Hacktag-Hackathon\" log --oneline -1)"
+    ]
+  }
+}

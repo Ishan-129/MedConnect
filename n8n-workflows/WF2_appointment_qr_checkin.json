@@ -1,0 +1,56 @@
+{
+  "name": "WF2 - Appointment QR Check-In",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "appointment-checkin",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - QR CheckIn",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify QR HMAC Signature and Expiration\nconst crypto = require('crypto');\nconst secret = $env.QR_SIGNING_SECRET || 'medconnect-secret';\nconst payload = $json.body;\n\nconst expectedSig = crypto.createHmac('sha256', secret).update(payload.appointment_id + payload.issued_at).digest('hex');\nconst isValid = (expectedSig === payload.signature) && (new Date(payload.exp) > new Date());\n\nreturn { json: { ...payload, isValid } };"
+      },
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.isValid }}", "value2": true }]
+        }
+      },
+      "name": "Valid QR?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO queue_entries (appointment_id, patient_id, doctor_id, token, position, status) SELECT a.appointment_id, a.patient_id, a.doctor_id, a.token, (SELECT COALESCE(MAX(position), 0) + 1 FROM queue_entries WHERE doctor_id = a.doctor_id AND status = 'WAITING'), 'WAITING' FROM appointments a WHERE a.appointment_id = $1 RETURNING *;"
+      },
+      "name": "Enqueue Patient",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ok', queue_id: $json.queue_id, position: $json.position, token: $json.token } }}"
+      },
+      "name": "Check-In Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    }
+  ]
+}

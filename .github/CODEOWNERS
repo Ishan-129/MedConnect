@@ -1,0 +1,25 @@
+# MedConnect Pulse — Code Ownership
+# Auto-requests the right reviewer per module based on real GitHub usernames.
+# Order matters: later rules override earlier ones for overlapping paths.
+
+# Default fallback — Repo owner (Dev 3) reviews anything not matched below
+*                                   @Ishan-129
+
+# Dev 1 — AI Services & n8n Workflows (@AYANK1510)
+/ai-services/                       @AYANK1510
+/n8n-workflows/                     @AYANK1510
+
+# Dev 2 — Backend, Database Migrations & Scripts (@Thorin1907)
+/backend/                           @Thorin1907
+/scripts/                           @Thorin1907
+
+# Dev 3 — Frontend UI & Documentation (@Ishan-129)
+/frontend/                          @Ishan-129
+/docs/                              @Ishan-129
+/.github/                           @Ishan-129
+
+# Shared Integration Contracts — Require BOTH module owners to review
+# Any change here touches multiple devs' work: both must approve before merge.
+/ai-services/intent-schema.json     @AYANK1510 @Thorin1907
+/backend/migrations/                @Thorin1907 @Ishan-129
+/.env.example                       @AYANK1510 @Thorin1907 @Ishan-129

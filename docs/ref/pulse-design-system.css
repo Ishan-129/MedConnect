@@ -1,0 +1,894 @@
+/**
+ * Pulse UI — Design System Stylesheet v1.0.0
+ * Multi-Project Portable Clinical-Grade UI Framework
+ * 
+ * Target Genres: Healthcare Automation, Telemetry Dashboards, Mission-Critical Systems, Modern SaaS.
+ * Zero-Dependency: Pure standard CSS with CSS Custom Properties. Drop into any web framework or vanilla HTML.
+ * Standards: WCAG AAA/AA contrast, sub-150ms microinteractions, tabular numerics, anti-slop rules.
+ */
+
+/* ==========================================================================
+   1. DESIGN TOKENS (LIGHT & DARK THEMES)
+   ========================================================================== */
+
+:root {
+  /* Color Space: Primary Light Canvas (Zinc-tinted clinical paper) */
+  --color-paper: #f8fafc;
+  --color-paper-2: #ffffff;
+  --color-paper-subtle: #f1f5f9;
+  --color-paper-overlay: rgba(15, 23, 42, 0.45);
+
+  /* Dual OKLCH definitions for P3 wide-gamut displays */
+  --color-paper-oklch: oklch(98.5% 0.005 240);
+  --color-paper-2-oklch: oklch(100% 0 0);
+  --color-paper-subtle-oklch: oklch(96.5% 0.008 240);
+
+  /* Typography Inks (High-contrast clinical slate/navy) */
+  --color-ink: #0f172a;
+  --color-ink-2: #334155;
+  --color-ink-muted: #64748b;
+  --color-ink-faint: #94a3b8;
+
+  /* Structural Rules & Borders (Crisp 1px hairlines) */
+  --color-rule: #e2e8f0;
+  --color-rule-subtle: #f1f5f9;
+
+  /* Semantic Accent: Medical Sapphire Blue (<= 5% viewport rule) */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-light: #eff6ff;
+  --color-accent-ink: #ffffff;
+
+  /* Emergency Alert: Crimson ER (Trauma triage, mission-critical dispatch) */
+  --color-emergency: #dc2626;
+  --color-emergency-hover: #b91c1c;
+  --color-emergency-light: #fef2f2;
+  --color-emergency-ink: #ffffff;
+
+  /* Operational Success: Emerald Active (Slots available, online node) */
+  --color-operational: #10b981;
+  --color-operational-hover: #059669;
+  --color-operational-light: #ecfdf5;
+  --color-operational-ink: #ffffff;
+
+  /* Warning / Triage: Amber (Queue delay, pending verification) */
+  --color-amber: #f59e0b;
+  --color-amber-hover: #d97706;
+  --color-amber-light: #fffbeb;
+
+  /* Specialty / Telemetry: Indigo / Violet */
+  --color-specialty: #6366f1;
+  --color-specialty-light: #eef2ff;
+
+  /* High-Contrast Focus Ring */
+  --color-focus: #2563eb;
+
+  /* Typography Stacks */
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Modular Typographic Scale */
+  --text-3xs: 0.625rem;    /* 10px */
+  --text-2xs: 0.6875rem;   /* 11px */
+  --text-xs:  0.75rem;     /* 12px */
+  --text-sm:  0.875rem;    /* 14px */
+  --text-base: 1.0rem;     /* 16px */
+  --text-md:  1.125rem;    /* 18px */
+  --text-lg:  1.25rem;     /* 20px */
+  --text-xl:  1.5rem;      /* 24px */
+  --text-2xl: 1.875rem;    /* 30px */
+  --text-3xl: 2.25rem;     /* 36px */
+  --text-4xl: 3.0rem;      /* 48px */
+
+  /* 4-Point Base Geometric Spacing Scale */
+  --space-3xs: 0.25rem;    /* 4px */
+  --space-2xs: 0.5rem;     /* 8px */
+  --space-xs:  0.75rem;    /* 12px */
+  --space-sm:  1.0rem;     /* 16px */
+  --space-md:  1.5rem;     /* 24px */
+  --space-lg:  2.0rem;     /* 32px */
+  --space-xl:  3.0rem;     /* 48px */
+  --space-2xl: 4.5rem;     /* 72px */
+  --space-3xl: 6.0rem;     /* 96px */
+
+  /* Surface Corner Radii */
+  --radius-xs:   0.375rem; /* 6px */
+  --radius-sm:   0.5rem;   /* 8px */
+  --radius-md:   0.75rem;  /* 12px */
+  --radius-lg:   1.0rem;   /* 16px */
+  --radius-xl:   1.25rem;  /* 20px */
+  --radius-2xl:  1.5rem;   /* 24px */
+  --radius-pill: 9999px;
+
+  /* Crisp Micro-Elevations & Hairline Shadows */
+  --shadow-hairline: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+  --shadow-card: 0 2px 8px -2px rgba(15, 23, 42, 0.05), 0 1px 3px 0 rgba(15, 23, 42, 0.03);
+  --shadow-dropdown: 0 10px 30px -4px rgba(15, 23, 42, 0.10), 0 4px 10px -2px rgba(15, 23, 42, 0.04);
+  --shadow-modal: 0 20px 45px -10px rgba(15, 23, 42, 0.20), 0 8px 16px -4px rgba(15, 23, 42, 0.06);
+
+  /* Motion & Timings (Strict anti-slop, no rubber-band overshoots) */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-micro: 80ms;
+  --dur-short: 140ms;
+  --dur-med: 220ms;
+  --dur-long: 320ms;
+}
+
+/* Dark Theme Tokens */
+[data-theme="dark"] {
+  --color-paper: #090d16;
+  --color-paper-2: #111827;
+  --color-paper-subtle: #1e293b;
+  --color-paper-overlay: rgba(0, 0, 0, 0.75);
+
+  --color-ink: #f8fafc;
+  --color-ink-2: #cbd5e1;
+  --color-ink-muted: #94a3b8;
+  --color-ink-faint: #64748b;
+
+  --color-rule: #1e293b;
+  --color-rule-subtle: #0f172a;
+
+  --color-accent: #3b82f6;
+  --color-accent-hover: #60a5fa;
+  --color-accent-light: rgba(59, 130, 246, 0.15);
+
+  --color-emergency: #ef4444;
+  --color-emergency-hover: #f87171;
+  --color-emergency-light: rgba(239, 68, 68, 0.15);
+
+  --color-operational: #10b981;
+  --color-operational-hover: #34d399;
+  --color-operational-light: rgba(16, 185, 129, 0.15);
+
+  --color-amber: #f59e0b;
+  --color-amber-hover: #fbbf24;
+  --color-amber-light: rgba(245, 158, 11, 0.15);
+
+  --color-focus: #38bdf8;
+
+  --shadow-hairline: 0 1px 2px 0 rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 2px 8px -2px rgba(0, 0, 0, 0.5), 0 1px 3px 0 rgba(0, 0, 0, 0.3);
+  --shadow-dropdown: 0 10px 30px -4px rgba(0, 0, 0, 0.6), 0 4px 10px -2px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 24px 48px -12px rgba(0, 0, 0, 0.75);
+}
+
+/* ==========================================================================
+   2. ACCESSIBILITY & SYSTEM PRESETS
+   ========================================================================== */
+
+/* Universal Focus Visible Ring */
+:focus-visible {
+  outline: 2px solid var(--color-focus) !important;
+  outline-offset: 2px !important;
+  transition: none !important;
+}
+
+/* Reduced Motion Safety */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 150ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Tabular Numerics for Counters, Timers, and Telemetry */
+.tabular-nums,
+[data-tabular-nums="true"] {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Screen Reader Only Utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ==========================================================================
+   3. BASE TYPOGRAPHY (NO ITALIC HEADERS, CLEAN GEOMETRY)
+   ========================================================================== */
+
+.pulse-h1,
+.pulse-h2,
+.pulse-h3,
+.pulse-h4 {
+  font-family: var(--font-display);
+  color: var(--color-ink);
+  font-weight: 700;
+  font-style: normal;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.pulse-h1 { font-size: var(--text-3xl); letter-spacing: -0.03em; }
+.pulse-h2 { font-size: var(--text-2xl); letter-spacing: -0.025em; }
+.pulse-h3 { font-size: var(--text-xl); letter-spacing: -0.02em; }
+.pulse-h4 { font-size: var(--text-lg); letter-spacing: -0.015em; font-weight: 600; }
+
+.pulse-text-body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-ink-2);
+  line-height: 1.5;
+}
+
+.pulse-text-sm {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink-2);
+  line-height: 1.4;
+}
+
+.pulse-text-muted {
+  color: var(--color-ink-muted);
+}
+
+.pulse-text-mono {
+  font-family: var(--font-mono);
+}
+
+/* ==========================================================================
+   4. BUTTONS & INTERACTIVE TRIGGERS
+   ========================================================================== */
+
+.pulse-btn,
+.hc-btn-primary,
+.hc-btn-secondary,
+.hc-btn-outline,
+.hc-btn-emergency,
+.saas-btn-primary,
+.saas-btn-secondary,
+.saas-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
+  padding: 0.625rem 1.0rem;
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-hairline);
+  user-select: none;
+  transition: 
+    background-color var(--dur-short) var(--ease-out),
+    border-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-short) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out);
+}
+
+.pulse-btn:active,
+.hc-btn-primary:active,
+.hc-btn-secondary:active,
+.hc-btn-outline:active,
+.hc-btn-emergency:active,
+.saas-btn-primary:active,
+.saas-btn-secondary:active,
+.saas-btn-danger:active {
+  transform: translateY(1px);
+}
+
+.pulse-btn:disabled,
+.hc-btn-primary:disabled,
+.hc-btn-secondary:disabled,
+.hc-btn-outline:disabled,
+.hc-btn-emergency:disabled,
+.saas-btn-primary:disabled,
+.saas-btn-secondary:disabled,
+.saas-btn-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Primary Medical Sapphire Action */
+.pulse-btn-primary,
+.hc-btn-primary,
+.saas-btn-primary {
+  background-color: var(--color-accent);
+  color: var(--color-accent-ink);
+  border-color: var(--color-accent);
+}
+.pulse-btn-primary:hover:not(:disabled),
+.hc-btn-primary:hover:not(:disabled),
+.saas-btn-primary:hover:not(:disabled) {
+  background-color: var(--color-accent-hover);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+}
+
+/* Secondary Neutral Slate Action */
+.pulse-btn-secondary,
+.hc-btn-secondary,
+.saas-btn-secondary {
+  background-color: var(--color-paper-2);
+  color: var(--color-ink);
+  border-color: var(--color-rule);
+}
+.pulse-btn-secondary:hover:not(:disabled),
+.hc-btn-secondary:hover:not(:disabled),
+.saas-btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-paper-subtle);
+  border-color: var(--color-ink-muted);
+}
+
+/* Outline Variant */
+.pulse-btn-outline,
+.hc-btn-outline {
+  background-color: transparent;
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.pulse-btn-outline:hover:not(:disabled),
+.hc-btn-outline:hover:not(:disabled) {
+  background-color: var(--color-accent-light);
+}
+
+/* Emergency Crimson Action */
+.pulse-btn-emergency,
+.hc-btn-emergency,
+.saas-btn-danger {
+  background-color: var(--color-emergency);
+  color: var(--color-emergency-ink);
+  border-color: var(--color-emergency);
+  font-weight: 700;
+}
+.pulse-btn-emergency:hover:not(:disabled),
+.hc-btn-emergency:hover:not(:disabled),
+.saas-btn-danger:hover:not(:disabled) {
+  background-color: var(--color-emergency-hover);
+  box-shadow: 0 3px 12px rgba(220, 38, 38, 0.35);
+}
+
+/* Ghost / Flat */
+.pulse-btn-ghost {
+  background-color: transparent;
+  color: var(--color-ink-2);
+  box-shadow: none;
+}
+.pulse-btn-ghost:hover:not(:disabled) {
+  background-color: var(--color-paper-subtle);
+  color: var(--color-ink);
+}
+
+/* Button Size Modifiers */
+.pulse-btn-xs {
+  padding: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+.pulse-btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+.pulse-btn-lg {
+  padding: 0.875rem 1.5rem;
+  font-size: var(--text-base);
+  border-radius: var(--radius-lg);
+}
+.pulse-btn-block {
+  width: 100%;
+}
+
+/* ==========================================================================
+   5. CARDS & CONTAINER SURFACES
+   ========================================================================== */
+
+.pulse-card,
+.hc-card,
+.saas-card {
+  background-color: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-xl);
+  padding: var(--space-md);
+  box-shadow: var(--shadow-hairline);
+  position: relative;
+  transition: 
+    border-color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-short) var(--ease-out),
+    transform var(--dur-short) var(--ease-out);
+}
+
+.pulse-card-hover,
+.hc-card-hover,
+.saas-card-hover {
+  background-color: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  transition: 
+    border-color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-short) var(--ease-out),
+    transform var(--dur-short) var(--ease-out);
+}
+
+.pulse-card-hover:hover,
+.hc-card-hover:hover,
+.saas-card-hover:hover {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-dropdown);
+  transform: translateY(-1px);
+}
+
+.pulse-card-elevated,
+.hc-card-elevated {
+  background-color: var(--color-paper-2);
+  border: 1px solid var(--color-rule-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+.pulse-card-emergency {
+  border-color: var(--color-emergency);
+  background-color: var(--color-emergency-light);
+}
+
+.pulse-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--color-rule-subtle);
+}
+
+.pulse-card-body {
+  color: var(--color-ink-2);
+  font-size: var(--text-sm);
+}
+
+.pulse-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  padding-top: var(--space-sm);
+  margin-top: var(--space-sm);
+  border-top: 1px solid var(--color-rule-subtle);
+}
+
+/* Stat & Telemetry Metric Cards */
+.pulse-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-sm);
+}
+.pulse-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+}
+.pulse-stat-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-ink-muted);
+}
+.pulse-stat-value {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+}
+
+/* ==========================================================================
+   6. FORM CONTROLS & INPUTS
+   ========================================================================== */
+
+.pulse-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  margin-bottom: var(--space-sm);
+}
+
+.pulse-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.pulse-input,
+.hc-input,
+.saas-input,
+.pulse-select,
+.hc-select,
+.pulse-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  padding: 0.625rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  outline: none;
+  transition: 
+    border-color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-short) var(--ease-out);
+}
+
+.pulse-input::placeholder,
+.hc-input::placeholder,
+.saas-input::placeholder,
+.pulse-textarea::placeholder {
+  color: var(--color-ink-muted);
+}
+
+.pulse-input:focus,
+.hc-input:focus,
+.saas-input:focus,
+.pulse-select:focus,
+.hc-select:focus,
+.pulse-textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.pulse-input-error {
+  border-color: var(--color-emergency) !important;
+}
+.pulse-input-error:focus {
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
+}
+
+.pulse-hint {
+  font-size: var(--text-2xs);
+  color: var(--color-ink-muted);
+}
+
+.pulse-error-text {
+  font-size: var(--text-2xs);
+  color: var(--color-emergency);
+  font-weight: 500;
+}
+
+/* ==========================================================================
+   7. STATUS BADGES, CHIPS & TELEMETRY INDICATORS
+   ========================================================================== */
+
+.pulse-badge,
+.hc-badge,
+.saas-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.pulse-badge-blue,
+.hc-badge-blue {
+  background-color: var(--color-accent-light);
+  color: var(--color-accent);
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+.pulse-badge-green,
+.hc-badge-green,
+.saas-badge-teal {
+  background-color: var(--color-operational-light);
+  color: #065f46;
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.pulse-badge-emergency,
+.hc-badge-emergency,
+.saas-badge-rose {
+  background-color: var(--color-emergency-light);
+  color: var(--color-emergency);
+  border-color: rgba(220, 38, 38, 0.25);
+}
+
+.pulse-badge-amber,
+.hc-badge-warning,
+.saas-badge-amber {
+  background-color: var(--color-amber-light);
+  color: #92400e;
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.pulse-badge-neutral,
+.hc-badge-neutral,
+.saas-badge-slate {
+  background-color: var(--color-paper-subtle);
+  color: var(--color-ink-2);
+  border-color: var(--color-rule);
+}
+
+/* Pulse Status Dots */
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  display: inline-block;
+}
+
+.pulse-dot-green { background-color: var(--color-operational); }
+.pulse-dot-red   { background-color: var(--color-emergency); }
+.pulse-dot-amber { background-color: var(--color-amber); }
+.pulse-dot-blue  { background-color: var(--color-accent); }
+
+/* ==========================================================================
+   8. ALERTS & CALLOUT BANNERS
+   ========================================================================== */
+
+.pulse-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-rule);
+  background-color: var(--color-paper-2);
+  box-shadow: var(--shadow-hairline);
+  margin-bottom: var(--space-sm);
+}
+
+.pulse-alert-icon {
+  flex-shrink: 0;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.pulse-alert-content {
+  flex-grow: 1;
+}
+
+.pulse-alert-title {
+  margin: 0 0 var(--space-3xs) 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.pulse-alert-desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-ink-2);
+  line-height: 1.4;
+}
+
+.pulse-alert-info {
+  background-color: var(--color-accent-light);
+  border-color: rgba(37, 99, 235, 0.2);
+}
+.pulse-alert-success {
+  background-color: var(--color-operational-light);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.pulse-alert-warning {
+  background-color: var(--color-amber-light);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.pulse-alert-emergency {
+  background-color: var(--color-emergency-light);
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+/* ==========================================================================
+   9. DATA TABLES & TABULAR TELEMETRY
+   ========================================================================== */
+
+.pulse-table-container {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-paper-2);
+}
+
+.pulse-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--text-xs);
+  font-family: var(--font-body);
+}
+
+.pulse-table th {
+  padding: 0.75rem 1.0rem;
+  background-color: var(--color-paper-subtle);
+  color: var(--color-ink);
+  font-weight: 700;
+  border-bottom: 1px solid var(--color-rule);
+  white-space: nowrap;
+}
+
+.pulse-table td {
+  padding: 0.75rem 1.0rem;
+  color: var(--color-ink-2);
+  border-bottom: 1px solid var(--color-rule-subtle);
+  white-space: nowrap;
+}
+
+.pulse-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pulse-table-hover tbody tr:hover {
+  background-color: var(--color-paper-subtle);
+}
+
+.pulse-table-striped tbody tr:nth-child(even) {
+  background-color: rgba(241, 245, 249, 0.45);
+}
+
+/* ==========================================================================
+   10. MODALS, DRAWERS & OVERLAYS
+   ========================================================================== */
+
+.pulse-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: var(--color-paper-overlay);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  animation: pulseFadeIn 180ms var(--ease-out) forwards;
+}
+
+.pulse-modal {
+  background-color: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: pulseScaleUp 200ms var(--ease-out) forwards;
+}
+
+.pulse-modal-header {
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--color-rule-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pulse-modal-body {
+  padding: var(--space-md);
+}
+
+.pulse-modal-footer {
+  padding: var(--space-md);
+  border-top: 1px solid var(--color-rule-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+/* ==========================================================================
+   11. KEYFRAME ANIMATIONS (HIGH-SIGNAL CLINICAL TELEMETRY)
+   ========================================================================== */
+
+@keyframes pulseFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulseScaleUp {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes pulseGentle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.78; transform: scale(1.05); }
+}
+.animate-pulse-gentle {
+  animation: pulseGentle 2.2s var(--ease-in-out) infinite;
+}
+
+@keyframes radarSweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.animate-radar-sweep {
+  animation: radarSweep 6s linear infinite;
+  transform-origin: center center;
+}
+
+@keyframes soundwave {
+  0%, 100% { height: 6px; }
+  50% { height: 22px; }
+}
+.animate-soundwave-1 { animation: soundwave 0.85s ease-in-out infinite 0.05s; }
+.animate-soundwave-2 { animation: soundwave 0.85s ease-in-out infinite 0.25s; }
+.animate-soundwave-3 { animation: soundwave 0.85s ease-in-out infinite 0.45s; }
+.animate-soundwave-4 { animation: soundwave 0.85s ease-in-out infinite 0.15s; }
+.animate-soundwave-5 { animation: soundwave 0.85s ease-in-out infinite 0.35s; }
+
+@keyframes arcPulse {
+  0% { stroke-dashoffset: 100; opacity: 0.2; }
+  50% { opacity: 0.9; }
+  100% { stroke-dashoffset: 0; opacity: 0.2; }
+}
+.animate-arc-pulse {
+  stroke-dasharray: 8 6;
+  animation: arcPulse 3s linear infinite;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up {
+  animation: fadeInUp 240ms var(--ease-out) forwards;
+}
+
+/* ==========================================================================
+   12. SCROLLBAR UTILITIES
+   ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-paper);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-rule);
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-faint);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ==========================================================================
+   13. PORTABLE UTILITY HELPERS
+   ========================================================================== */
+
+.pulse-flex           { display: flex; }
+.pulse-flex-col       { display: flex; flex-direction: column; }
+.pulse-items-center   { align-items: center; }
+.pulse-items-start    { align-items: flex-start; }
+.pulse-justify-center { justify-content: center; }
+.pulse-justify-between{ justify-content: space-between; }
+.pulse-gap-1          { gap: var(--space-3xs); }
+.pulse-gap-2          { gap: var(--space-2xs); }
+.pulse-gap-3          { gap: var(--space-xs); }
+.pulse-gap-4          { gap: var(--space-sm); }
+.pulse-gap-6          { gap: var(--space-md); }
+.pulse-grid           { display: grid; }
+.pulse-w-full         { width: 100%; }

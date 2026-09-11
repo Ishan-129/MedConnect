@@ -1,0 +1,24 @@
+{
+  "name": "medconnect-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MedConnect Pulse — n8n-Powered Healthcare Automation: AI Receptionist, Live Queue & Emergency Dispatch",
+  "type": "module",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "seed": "node scripts/seed-db.js",
+    "test:concurrency": "node scripts/test-concurrency.js"
+  },
+  "keywords": [
+    "healthcare",
+    "n8n",
+    "sarvam-ai",
+    "supabase",
+    "emergency-dispatch",
+    "live-queue"
+  ],
+  "author": "4 Bit Minds",
+  "license": "UNLICENSED"
+}

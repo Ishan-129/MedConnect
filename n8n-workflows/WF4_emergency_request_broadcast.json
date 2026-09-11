@@ -1,0 +1,69 @@
+{
+  "name": "WF4 - Emergency Request Broadcast & Geo-Filter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emergency-request",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook - Emergency Request Created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM find_nearby_hospitals_for_emergency($1, $2, 10.0);"
+      },
+      "name": "Haversine 10km Geo-Filter RPC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "=🚨 *EMERGENCY RESOURCE REQUEST* 🚨\n\n*Hospital:* {{ $json.requesting_hospital_name }}\n*Resource:* {{ $json.resource_type }}\n*Quantity:* {{ $json.quantity }} units\n*Distance:* {{ $json.distance_km }} km\n*Priority:* {{ $json.priority }}\n\nAction required immediately:",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ ACCEPT & SUPPLY",
+                    "additionalFields": {
+                      "callback_data": "=ACCEPT:{{ $json.request_id }}:{{ $json.hospital_id }}"
+                    }
+                  },
+                  {
+                    "text": "❌ DECLINE",
+                    "additionalFields": {
+                      "callback_data": "=REJECT:{{ $json.request_id }}:{{ $json.hospital_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "name": "Broadcast Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'broadcasted', eligible_hospitals_count: $items().length, request_id: $json.request_id } }}"
+      },
+      "name": "Respond Broadcast Initiated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 300]
+    }
+  ]
+}

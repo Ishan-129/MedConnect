@@ -1,0 +1,173 @@
+{
+  "name": "WF1 - AI Receptionist & Appointment Booking",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "receptionist",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook - Receptionist Intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.input_type }}",
+              "value2": "audio"
+            }
+          ]
+        }
+      },
+      "name": "Is Audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sarvam.ai/speech-to-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "name": "Sarvam AI Saaras STT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "message": [
+            {
+              "role": "system",
+              "message": "You are the MedConnect Pulse Administrative Receptionist. Extract department, preferred date, reason for visit, and patient intent. Do not diagnose."
+            },
+            {
+              "role": "user",
+              "message": "={{ $json.transcript || $json.body.text }}"
+            }
+          ]
+        }
+      },
+      "name": "OpenAI Intent Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM doctor_slots WHERE status = 'AVAILABLE' AND start_time >= now() LIMIT 5;"
+      },
+      "name": "Supabase Slot Lookup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT book_appointment_atomic($1, $2, $3, $4, $5, $6);"
+      },
+      "name": "Atomic Booking RPC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ok', token: $json.token, qr_code: $json.qr_reference, appointment_id: $json.appointment_id } }}"
+      },
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Receptionist Intake": {
+      "main": [
+        [
+          {
+            "node": "Is Audio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Audio?": {
+      "main": [
+        [
+          {
+            "node": "Sarvam AI Saaras STT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI Intent Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sarvam AI Saaras STT": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Intent Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Intent Agent": {
+      "main": [
+        [
+          {
+            "node": "Supabase Slot Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Slot Lookup": {
+      "main": [
+        [
+          {
+            "node": "Atomic Booking RPC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atomic Booking RPC": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
