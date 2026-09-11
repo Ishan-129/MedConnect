@@ -1,15 +1,23 @@
-// Supabase Client Wrapper with Graceful Offline/Demo Mode
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 export const isSupabaseConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
+  supabaseUrl &&
+  supabaseAnonKey &&
   !supabaseUrl.includes('your-project')
 );
 
+export const supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { persistSession: false },
+    })
+  : null;
+
 export const getSupabaseConfig = () => ({
   url: supabaseUrl,
-  isConfigured: isSupabaseConfigured
+  isConfigured: isSupabaseConfigured,
 });
+
+export default supabase;
