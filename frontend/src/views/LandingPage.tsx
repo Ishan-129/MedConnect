@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { motionTokens, springs } from '../lib/motionTokens';
+import { InteractiveNetworkGlobe } from '../components/InteractiveNetworkGlobe';
 
 interface LandingPageProps {
   onSelectPortal: (portal: 'patient' | 'hospital', subView?: 'receptionist' | 'queue' | 'emergency') => void;
@@ -41,76 +42,91 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
     <div className="space-y-12 py-4 animate-fade-in-up">
       
       {/* 1. HERO SECTION */}
-      <section className="pulse-card p-8 sm:p-12 lg:p-14 relative overflow-hidden">
-        <div className="relative z-10 max-w-4xl space-y-6">
+      <section className="pulse-card p-6 sm:p-10 lg:p-12 relative overflow-hidden">
+        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
           
-          {/* Live Platform Badge */}
-          <motion.div
-            initial={{ opacity: 0, y: motionTokens.distance.xs }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: motionTokens.duration.normal }}
-            className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-accent-light border border-accent/25 text-accent text-xs font-mono font-semibold shadow-hairline"
-          >
-            <span className="pulse-dot pulse-dot-green animate-pulse-gentle" />
-            <span>Live Healthcare Automation Platform • n8n & Supabase Orchestrated</span>
-          </motion.div>
+          {/* Left Column: Hero copy and CTAs */}
+          <div className="lg:col-span-7 space-y-6">
+            
+            {/* Live Platform Badge */}
+            <motion.div
+              initial={{ opacity: 0, y: motionTokens.distance.xs }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: motionTokens.duration.normal }}
+              className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-accent-light border border-accent/25 text-accent text-xs font-mono font-semibold shadow-hairline"
+            >
+              <span className="pulse-dot pulse-dot-green animate-pulse-gentle" />
+              <span>Live Healthcare Automation Platform • n8n & Supabase Orchestrated</span>
+            </motion.div>
 
-          {/* Main Display Headline */}
-          <motion.h1 
-            initial={{ opacity: 0, y: motionTokens.distance.sm }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: motionTokens.duration.normal, delay: 0.05 }}
-            className="pulse-h1 text-3xl sm:text-5xl lg:text-6xl font-extrabold text-ink tracking-tight leading-[1.12]"
-          >
-            Connecting Care When <span className="text-accent">Seconds Count</span>
-          </motion.h1>
+            {/* Main Display Headline */}
+            <motion.h1 
+              initial={{ opacity: 0, y: motionTokens.distance.sm }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: motionTokens.duration.normal, delay: 0.05 }}
+              className="pulse-h1 text-3xl sm:text-5xl lg:text-5xl xl:text-6xl font-extrabold text-ink tracking-tight leading-[1.12]"
+            >
+              Connecting Care When <span className="text-accent">Seconds Count</span>
+            </motion.h1>
 
-          {/* Value Proposition */}
-          <motion.p
-            initial={{ opacity: 0, y: motionTokens.distance.sm }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: motionTokens.duration.normal, delay: 0.1 }}
-            className="pulse-text-body text-base sm:text-lg text-ink-2 max-w-3xl leading-relaxed"
-          >
-            MedConnect Pulse unites patients and regional hospital networks into an intelligent, event-driven ecosystem. Multilingual voice triage streamlines routine OPD bookings, while an automated 15km radar network coordinates emergency supplies during the critical Golden Hour.
-          </motion.p>
+            {/* Value Proposition */}
+            <motion.p
+              initial={{ opacity: 0, y: motionTokens.distance.sm }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: motionTokens.duration.normal, delay: 0.1 }}
+              className="pulse-text-body text-base sm:text-lg text-ink-2 leading-relaxed"
+            >
+              MedConnect Pulse unites patients and regional hospital networks into an intelligent, event-driven ecosystem. Multilingual voice triage streamlines routine OPD bookings, while an automated 15km radar network coordinates emergency supplies during the critical Golden Hour.
+            </motion.p>
 
-          <motion.p
-            initial={{ opacity: 0, y: motionTokens.distance.sm }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: motionTokens.duration.normal, delay: 0.15 }}
-            className="pulse-text-sm text-ink-muted max-w-3xl leading-relaxed"
-          >
-            Select your dedicated portal below to access patient outpatient services or hospital emergency operations:
-          </motion.p>
+            <motion.p
+              initial={{ opacity: 0, y: motionTokens.distance.sm }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: motionTokens.duration.normal, delay: 0.15 }}
+              className="pulse-text-sm text-ink-muted leading-relaxed"
+            >
+              Select your dedicated portal below to access patient outpatient services or hospital emergency operations:
+            </motion.p>
 
-          {/* Action CTAs */}
-          <motion.div
-            initial={{ opacity: 0, y: motionTokens.distance.sm }}
-            animate={{ opacity: 1, y: 0 }}
+            {/* Action CTAs */}
+            <motion.div
+              initial={{ opacity: 0, y: motionTokens.distance.sm }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: motionTokens.duration.normal, delay: 0.2 }}
+              className="flex flex-wrap items-center gap-3 pt-2"
+            >
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => handleNavigate('patient', 'receptionist')}
+                className="pulse-btn pulse-btn-primary pulse-btn-lg text-xs"
+              >
+                <UserCheck className="w-4 h-4" />
+                <span>ENTER PATIENT PORTAL</span>
+                <ArrowRight className="w-4 h-4" />
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => handleNavigate('hospital', 'emergency')}
+                className="pulse-btn pulse-btn-emergency pulse-btn-lg text-xs"
+              >
+                <Radio className="w-4 h-4 text-white" />
+                <span>HOSPITAL EMERGENCY PORTAL (ED)</span>
+              </motion.button>
+            </motion.div>
+
+          </div>
+
+          {/* Right Column: Interactive Three.js 3D Geo-Radar Globe */}
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: motionTokens.duration.normal, delay: 0.2 }}
-            className="flex flex-wrap items-center gap-3 pt-2"
+            className="lg:col-span-5 w-full flex justify-center"
           >
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => handleNavigate('patient', 'receptionist')}
-              className="pulse-btn pulse-btn-primary pulse-btn-lg text-xs"
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>ENTER PATIENT PORTAL</span>
-              <ArrowRight className="w-4 h-4" />
-            </motion.button>
-
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => handleNavigate('hospital', 'emergency')}
-              className="pulse-btn pulse-btn-emergency pulse-btn-lg text-xs"
-            >
-              <Radio className="w-4 h-4 text-white" />
-              <span>HOSPITAL EMERGENCY PORTAL (ED)</span>
-            </motion.button>
+            <InteractiveNetworkGlobe />
           </motion.div>
 
         </div>
@@ -183,22 +199,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
                 </p>
               </div>
 
-              <ul className="space-y-3 font-mono text-xs text-ink-2">
+              <ul className="space-y-3 text-xs sm:text-sm text-ink-2">
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Multilingual Voice Intake:</strong> Sarvam AI Saaras:v1 STT listens and extracts symptoms in natural Hindi or English.</span>
+                  <span><strong className="text-ink font-semibold">Speak in Your Language:</strong> Book appointments easily by speaking in natural Hindi or English without typing.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Smart Doctor Routing:</strong> Matches clinical symptoms directly to verified department specialists and real OPD slots.</span>
+                  <span><strong className="text-ink font-semibold">Right Doctor, Right Care:</strong> Automatically connects your symptoms to the right department specialist and available OPD slot.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Digital QR Token:</strong> Receive an instant check-in pass e.g. <code className="text-accent font-bold tabular-nums">#MED-4029</code> on your screen.</span>
+                  <span><strong className="text-ink font-semibold">Instant Digital QR Token:</strong> Receive an instant check-in pass directly on your phone with zero paper or receptionist lines.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Live Queue Status:</strong> View your live wait queue position and get notified when it is your turn to see the doctor.</span>
+                  <span><strong className="text-ink font-semibold">Live Wait Queue:</strong> Check your live waiting position in real time and get notified when it is your turn.</span>
                 </li>
               </ul>
             </div>
@@ -248,26 +264,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
                   Hospital Emergency Portal (ED)
                 </h3>
                 <p className="pulse-text-sm text-ink-muted mt-1.5 leading-relaxed">
-                  Inter-hospital emergency resource exchange for blood units (O-), oxygen cylinders, and ICU beds with live 15km radar tracking and ambulance QR handover.
+                  Coordinate urgent medical resources across nearby hospitals for ICU beds, rare blood groups, and oxygen supplies during critical emergency hours.
                 </p>
               </div>
 
-              <ul className="space-y-3 font-mono text-xs text-ink-2">
+              <ul className="space-y-3 text-xs sm:text-sm text-ink-2">
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-emergency shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">15km Haversine Radar:</strong> Automatically queries nearby regional hospitals with real-time distance calculations.</span>
+                  <span><strong className="text-ink font-semibold">Nearby Hospital Radar:</strong> Scans regional hospitals within 15 km to locate available ICU beds and emergency supplies in seconds.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-emergency shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Instant Telegram Alert:</strong> Direct push alerts to hospital ER coordinators with 1-click accept actions.</span>
+                  <span><strong className="text-ink font-semibold">Instant Emergency Alerts:</strong> Sends immediate SOS notifications to emergency response teams with 1-click confirmation.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-emergency shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Atomic Supply Lock:</strong> Concurrency-safe PostgreSQL RPC prevents duplicate allocation of scarce resources.</span>
+                  <span><strong className="text-ink font-semibold">Guaranteed Resource Locking:</strong> Automatically reserves critical beds and blood units so they are never double-booked.</span>
                 </li>
                 <li className="flex items-start space-x-2.5">
                   <CheckCircle2 className="w-4 h-4 text-emergency shrink-0 mt-0.5" />
-                  <span><strong className="text-ink">Ambulance QR Handshake:</strong> Cryptographically signed digital pass for verified 2-step physical pickup & delivery.</span>
+                  <span><strong className="text-ink font-semibold">Secure Ambulance Handover:</strong> Uses digital QR verification for ambulance staff to ensure safe, verified transfer between hospitals.</span>
                 </li>
               </ul>
             </div>
@@ -301,13 +317,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
       <section className="pulse-card p-8 sm:p-10 space-y-6">
         <div className="max-w-2xl space-y-2">
           <span className="text-xs font-mono uppercase text-accent font-bold tracking-wider">
-            System Capabilities
+            Core Benefits
           </span>
           <h2 className="pulse-h2 text-2xl font-bold text-ink">
-            End-to-End Automated Healthcare Operations
+            Fast, Reliable &amp; Connected Healthcare
           </h2>
           <p className="pulse-text-sm text-ink-muted">
-            Engineered for high reliability, atomic concurrency safety, and rapid response during critical medical windows.
+            Designed to eliminate waiting delays, prevent booking conflicts, and coordinate life-saving care when every second counts.
           </p>
         </div>
 
@@ -316,9 +332,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
             <div className="w-9 h-9 rounded-lg bg-accent-light text-accent flex items-center justify-center">
               <Zap className="w-4 h-4" />
             </div>
-            <h4 className="font-bold text-sm text-ink">Event-Driven Automation</h4>
-            <p className="text-xs text-ink-muted leading-relaxed font-mono">
-              Live n8n webhook pipelines orchestrate appointment check-in, queue notifications, emergency broadcasts, and auto-escalation timeouts.
+            <h4 className="font-bold text-sm text-ink">Instant Automated Response</h4>
+            <p className="text-xs sm:text-sm text-ink-muted leading-relaxed">
+              From patient check-in to emergency hospital broadcasts, automated workflows trigger instant notifications and status updates without human delay.
             </p>
           </div>
 
@@ -326,9 +342,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
             <div className="w-9 h-9 rounded-lg bg-operational-light text-operational flex items-center justify-center">
               <ShieldCheck className="w-4 h-4" />
             </div>
-            <h4 className="font-bold text-sm text-ink">Zero Double-Allocation</h4>
-            <p className="text-xs text-ink-muted leading-relaxed font-mono">
-              PostgreSQL row-level locking ensures that when emergency supplies or doctor slots are claimed, conflicts are atomically prevented.
+            <h4 className="font-bold text-sm text-ink">Guaranteed Bed &amp; Blood Booking</h4>
+            <p className="text-xs sm:text-sm text-ink-muted leading-relaxed">
+              Real-time locking ensures that once an ICU bed, blood unit, or doctor slot is confirmed, it is securely held for that patient with zero risk of double booking.
             </p>
           </div>
 
@@ -336,9 +352,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
             <div className="w-9 h-9 rounded-lg bg-emergency-light text-emergency flex items-center justify-center">
               <Truck className="w-4 h-4" />
             </div>
-            <h4 className="font-bold text-sm text-ink">Physical Chain-of-Custody</h4>
-            <p className="text-xs text-ink-muted leading-relaxed font-mono">
-              Digital QR passes verify ambulance transit between donor and recipient hospitals with temperature and cold-chain checkpoints.
+            <h4 className="font-bold text-sm text-ink">Verified Emergency Transit</h4>
+            <p className="text-xs sm:text-sm text-ink-muted leading-relaxed">
+              Digital QR passes track and verify critical medical transfers between ambulances and hospitals, ensuring safe, accountable delivery without paper delays.
             </p>
           </div>
         </div>
