@@ -10,7 +10,8 @@ export async function getQueueStatus(tokenIdOrApptId) {
 }
 
 export async function getQueueEntries(hospitalId) {
-  return db.inMemory.queue_entries.filter(q => !hospitalId || q.hospital_id === hospitalId);
+  const entries = db.inMemory?.queue_entries || db.inMemory?.appointments || [];
+  return entries.filter(q => !hospitalId || q.hospital_id === hospitalId || q.hospitalId === hospitalId);
 }
 
 export default {

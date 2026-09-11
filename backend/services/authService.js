@@ -45,11 +45,21 @@ export async function login({ phone, role }) {
 
 export async function verifySession(token) {
   if (!token || typeof token !== 'string') {
-    return { valid: false, user: null };
+    return { valid: false, user: null, error: 'MISSING_TOKEN' };
+  }
+
+  // Check token expiration (24h TTL)
+  const parts = token.split('-');
+  const timestampStr = parts[parts.length - 1];
+  const timestamp = Number(timestampStr);
+  if (!Number.isNaN(timestamp) && timestamp > 1000000000000) {
+    const ageMs = Date.now() - timestamp;
+    if (ageMs > 24 * 60 * 60 * 1000) {
+      return { valid: false, user: null, error: 'SESSION_EXPIRED' };
+    }
   }
 
   // Check if token corresponds to a user
-  const parts = token.split('-');
   const userId = parts.length > 2 ? parts.slice(1, -1).join('-') : parts[1];
 
   const users = db.inMemory?.users || [];

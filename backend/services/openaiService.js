@@ -1,7 +1,26 @@
-/**
- * OpenAI Intent & Slot Extraction Service (gpt-4o-mini / Advanced Indic Medical NLP)
- * Parses transcription text to extract structured medical receptionist intent and slots.
- */
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Ensure .env is loaded in process.env
+if (typeof process !== 'undefined' && process.env) {
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    for (const line of envContent.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        const idx = trimmed.indexOf('=');
+        if (idx > 0) {
+          const key = trimmed.slice(0, idx).trim();
+          const value = trimmed.slice(idx + 1).trim();
+          if (!process.env[key]) {
+            process.env[key] = value;
+          }
+        }
+      }
+    }
+  }
+}
 
 export function getOpenAICredentials() {
   let apiKey = '';
@@ -20,7 +39,7 @@ export async function extractIntentAndSlots(transcriptionText) {
     try {
       const systemPrompt = `You are a medical receptionist NLP parser for an Indian hospital system.
 Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with keys:
-- intent: BOOK_APPOINTMENT, CHECK_APPOINTMENT, CANCEL_APPOINTMENT, CHECK_QUEUE, CHECK_DOCTOR_AVAILABILITY, CHECK_DUES, GENERAL_HOSPITAL_QUERY, EMERGENCY_RESOURCE_REQUEST, UNKNOWN
+- intent: GREETING, CAPABILITIES_QUERY, BOOK_APPOINTMENT, CHECK_APPOINTMENT, CANCEL_APPOINTMENT, CHECK_QUEUE, CHECK_DOCTOR_AVAILABILITY, CHECK_DUES, GENERAL_HOSPITAL_QUERY, EMERGENCY_RESOURCE_REQUEST, UNKNOWN
 - patientName (string or null)
 - patientPhone (string or null)
 - doctorName (string e.g. Dr. Ananya Roy, Dr. Rajesh Sharma, Dr. Priya Nair, Dr. Vikramaditya Rao, or null)
@@ -33,7 +52,12 @@ Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with 
 - quantity (number or null)
 - urgency (LOW, MEDIUM, HIGH, CRITICAL or null)
 - symptoms (string or null)
-- queryTopic (string or null)`;
+- queryTopic (string or null)
+
+Special guidelines:
+- If the user provides a greeting (e.g. "hi", "hello", "namaste", "good morning"), intent must be GREETING.
+- If the user asks about the AI identity, services, or general help (e.g. "who are you", "what can you do", "help me"), intent must be CAPABILITIES_QUERY.
+- If the user describes symptoms (e.g. "headache and fever", "chest pain", "knee hurts"), intent must be BOOK_APPOINTMENT, department should be deduced, and symptoms must be recorded.`;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -50,6 +74,7 @@ Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with 
           response_format: { type: 'json_object' },
           temperature: 0.1,
         }),
+        signal: AbortSignal.timeout(6000),
       });
 
       if (response.ok) {
@@ -95,10 +120,51 @@ Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with 
     tokenId = `MED-${tokenId.replace(/TOKEN-?/i, '')}`;
   }
 
+  // Symptom detection
+  const symptomKeywords = [
+    { match: ['headache', 'sar dard', 'sir dard', 'सिरदर्द', 'migraine'], label: 'headache' },
+    { match: ['fever', 'bukhar', 'बुखार', 'high temp', 'temperature'], label: 'fever' },
+    { match: ['cough', 'khansi', 'खांसी'], label: 'cough' },
+    { match: ['cold', 'jukham', 'जुकाम', 'runny nose'], label: 'cold' },
+    { match: ['chest pain', 'seene me dard', 'दिल में दर्द'], label: 'chest pain' },
+    { match: ['knee pain', 'ghutna', 'घुटने में दर्द', 'knee'], label: 'knee pain' },
+    { match: ['back pain', 'kamar dard', 'कमर दर्द'], label: 'back pain' },
+    { match: ['stomach', 'pet dard', 'पेट दर्द', 'acidity', 'vomit', 'vomiting', 'उल्टी'], label: 'stomach discomfort / nausea' },
+    { match: ['skin rash', 'khujli', 'खुजली', 'allergy', 'rash'], label: 'skin rash / allergy' },
+    { match: ['fracture', 'broken bone', 'haddi toot', 'हड्डी'], label: 'fracture / bone injury' },
+    { match: ['dizziness', 'chakkar', 'चक्कर'], label: 'dizziness' },
+    { match: ['sick', 'unwell', 'ill', 'tabiyat kharab', 'तबीयत खराब', 'बीमार'], label: 'feeling unwell' },
+  ];
+
+  const matchedSymptoms = [];
+  for (const sk of symptomKeywords) {
+    if (sk.match.some(m => lower.includes(m))) {
+      matchedSymptoms.push(sk.label);
+    }
+  }
+  const detectedSymptomsText = matchedSymptoms.length > 0 ? matchedSymptoms.join(' and ') : undefined;
+
   let intent = 'UNKNOWN';
 
-  // 1. EMERGENCY_RESOURCE_REQUEST
+  // 0a. GREETING
   if (
+    /^(hi|hello|hey|greetings|namaste|namaskar|good\s*(morning|afternoon|evening)|helo|hii+)\b/i.test(lower.trim()) ||
+    ['hi', 'hello', 'hey', 'namaste', 'namaskar', 'good morning', 'good afternoon', 'good evening', 'नमस्ते', 'प्रणाम', 'हेलो', 'हाय'].includes(lower.trim())
+  ) {
+    intent = 'GREETING';
+  }
+  // 0b. CAPABILITIES_QUERY
+  else if (
+    lower.includes('who are you') || lower.includes('what can you do') || lower.includes('what do you do') ||
+    lower.includes('what is your name') || lower.includes('help me') || lower.includes('how can you help') ||
+    lower.includes('kya kar sakte ho') || lower.includes('tum kaun ho') || lower.includes('aap kaun ho') ||
+    lower.includes('services') || lower.includes('मदद') || lower.includes('आप कौन हैं') || lower.includes('तुम कौन हो') ||
+    lower === 'help' || lower === 'help please'
+  ) {
+    intent = 'CAPABILITIES_QUERY';
+  }
+  // 1. EMERGENCY_RESOURCE_REQUEST
+  else if (
     lower.includes('emergency') || lower.includes('critical') || lower.includes('blood') ||
     lower.includes('oxygen') || lower.includes('icu') || lower.includes('ventilator') ||
     lower.includes('ambulance') || lower.includes('zaroorat') || lower.includes('chahiye urgent') ||
@@ -158,26 +224,28 @@ Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with 
   ) {
     intent = 'CHECK_DUES';
   }
-  // 7. GENERAL_HOSPITAL_QUERY
-  else if (
-    lower.includes('address') || lower.includes('location') || lower.includes('phone') ||
-    lower.includes('contact') || lower.includes('where is') || lower.includes('visiting hours') ||
-    lower.includes('kahan hai') || lower.includes('hospital detail') || lower.includes('timing') ||
-    lower.includes('direction') || lower.includes('पता') || lower.includes('कहाँ है') ||
-    lower.includes('फोन') || lower.includes('संपर्क') || lower.includes('स्थान')
-  ) {
-    intent = 'GENERAL_HOSPITAL_QUERY';
-  }
-  // 8. BOOK_APPOINTMENT
+  // 7. BOOK_APPOINTMENT (Explicit intent or implicit through symptom report)
   else if (
     lower.includes('book') || lower.includes('milna') || lower.includes('appointment') ||
     lower.includes('dikhana') || lower.includes('consultation') || lower.includes('doctor se') ||
     lower.includes('checkup') || lower.includes('visit') || lower.includes('dikhao') ||
     lower.includes('सलाह') || lower.includes('परामर्श') || lower.includes('अपॉइंटमेंट') ||
     lower.includes('बुक') || lower.includes('मिलना है') || lower.includes('दिखाना है') ||
-    lower.includes('चेकअप')
+    lower.includes('चेकअप') || Boolean(detectedSymptomsText)
   ) {
     intent = 'BOOK_APPOINTMENT';
+  }
+  // 8. GENERAL_HOSPITAL_QUERY
+  else if (
+    lower.includes('address') || lower.includes('location') || lower.includes('where is') ||
+    lower.includes('visiting hours') || lower.includes('kahan hai') || lower.includes('hospital detail') ||
+    lower.includes('hospital phone') || lower.includes('hospital contact') ||
+    (lower.includes('phone') && !lower.includes('my phone') && !/\b\d{10}\b/.test(lower)) ||
+    (lower.includes('contact') && !lower.includes('my contact')) ||
+    lower.includes('direction') || lower.includes('पता') || lower.includes('कहाँ है') ||
+    lower.includes('अस्पताल') || lower.includes('स्थान')
+  ) {
+    intent = 'GENERAL_HOSPITAL_QUERY';
   }
 
   // ── Doctor Name extraction (Bilingual + Phonetic matches) ──
@@ -326,7 +394,7 @@ Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with 
     resourceType,
     quantity,
     urgency: lower.includes('critical') || lower.includes('गंभीर') ? 'CRITICAL' : 'HIGH',
-    symptoms: lower.includes('pain') || lower.includes('दर्द') ? 'Discomfort reported' : undefined,
+    symptoms: detectedSymptomsText || (lower.includes('pain') || lower.includes('दर्द') ? 'Discomfort reported' : undefined),
     confidence: isConfigured ? 0.99 : 0.95,
     isConfigured,
     status: isConfigured ? 'SUCCESS' : 'OPENAI_NOT_CONFIGURED',

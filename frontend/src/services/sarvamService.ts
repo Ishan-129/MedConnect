@@ -46,7 +46,8 @@ export function getSarvamCredentials(): { apiKey: string; isConfigured: boolean 
     apiKey = (import.meta as any).env.VITE_SARVAM_API_KEY || '';
   }
   const trimmed = apiKey.trim();
-  return { apiKey: trimmed, isConfigured: Boolean(trimmed) };
+  // Backend proxy (/api/sarvam) handles transcription and synthesis securely
+  return { apiKey: trimmed, isConfigured: true };
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
@@ -113,13 +114,15 @@ export async function transcribeAudio(
     };
   }
 
+  // No audio blob provided and no local text — return empty/unconfigured status.
+  // The UI's voice pipeline will handle this by prompting the user to speak.
   const { isConfigured } = getSarvamCredentials();
   return {
-    text: 'Dr. Rajesh Sharma se Cardiology me appointment chahiye aaj 11:00 AM',
+    text: '',
     detectedLang: langCode,
-    confidence: isConfigured ? 0.95 : 0.85,
+    confidence: 0,
     isConfigured,
-    status: isConfigured ? 'DEMO_FALLBACK' : 'SARVAM_NOT_CONFIGURED',
+    status: isConfigured ? 'EMPTY_INPUT' : 'SARVAM_NOT_CONFIGURED',
   };
 }
 

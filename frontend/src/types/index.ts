@@ -56,6 +56,7 @@ export interface Doctor {
   department_name: string;
   name: string;
   specialty: string;
+  specialization?: string; // Backend column alias for specialty
   available_today: boolean;
 }
 

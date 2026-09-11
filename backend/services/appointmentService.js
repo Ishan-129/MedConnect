@@ -6,9 +6,22 @@
 
 import { db } from '../db.js';
 import { randomUUID } from 'node:crypto';
+import { triggerN8nQueueNotification } from './n8nService.js';
 
 export async function calculateAvailableSlots(doctorId, date) {
   return db.calculateAvailableSlots(doctorId, date);
+}
+
+// In-memory idempotency deduplication cache (15s TTL)
+const recentBookingsCache = new Map();
+
+function cleanOldBookings() {
+  const now = Date.now();
+  for (const [key, val] of recentBookingsCache.entries()) {
+    if (now - val.timestamp > 15000) {
+      recentBookingsCache.delete(key);
+    }
+  }
 }
 
 export async function bookAppointment({
@@ -21,6 +34,28 @@ export async function bookAppointment({
   timeSlot,
   notes = '',
 }) {
+  cleanOldBookings();
+
+  // Validate patientPhone
+  const cleanPhone = (patientPhone || '').trim();
+  if (!cleanPhone) {
+    throw new Error('Valid patient phone number is required');
+  }
+
+  // Validate date (reject past dates)
+  const todayStr = new Date().toISOString().split('T')[0];
+  const targetDate = date || todayStr;
+  if (targetDate < todayStr) {
+    throw new Error('Appointment date cannot be in the past');
+  }
+
+  // Idempotency check for rapid duplicate clicks
+  const dedupeKey = `${cleanPhone}:${doctorId}:${targetDate}:${timeSlot || 'any'}`;
+  if (recentBookingsCache.has(dedupeKey)) {
+    const cached = recentBookingsCache.get(dedupeKey);
+    return cached.result;
+  }
+
   // 1. Verify doctor
   const doctor = await db.getDoctorById(doctorId);
   if (!doctor) {
@@ -31,13 +66,10 @@ export async function bookAppointment({
   const hospId = hospitalId || doctor.hospital_id;
 
   // 2. Find or register patient
-  let patient = await db.getPatientByPhone(patientPhone);
+  let patient = await db.getPatientByPhone(cleanPhone);
   if (!patient) {
-    patient = await db.createPatient({ name: patientName, phone: patientPhone });
+    patient = await db.createPatient({ name: patientName.trim() || 'Patient', phone: cleanPhone });
   }
-
-  // 3. Find matching slot
-  const targetDate = date || new Date().toISOString().split('T')[0];
   const slots = await db.getDoctorSlots(doctorId, targetDate);
 
   let selectedSlot;
@@ -79,7 +111,22 @@ export async function bookAppointment({
     throw new Error(result.message || result.error || 'Failed to book appointment slot');
   }
 
-  return {
+  // Trigger n8n Workflow (MEDCONNECT | WF05 | QUEUE NOTIFICATION)
+  triggerN8nQueueNotification({
+    appointment_id: result.appointment?.id || result.appointment_id,
+    patient_id: patient.patient_id,
+    patient_name: patient.name || patientName,
+    phone_number: patient.phone || patientPhone,
+    token_number: token,
+    queue_position: 1,
+    estimated_wait_minutes: 15,
+    doctor_name: doctor.name,
+    room_number: doctor.room_number || 'Room 101',
+    department: doctor.department_name || deptId || 'General Medicine',
+    reminder_stage: 'checked_in',
+  }).catch(err => console.error('[n8n] Failed to trigger queue notification:', err.message));
+
+  const out = {
     success: true,
     appointment: result.appointment || {
       appointment_id: result.appointment_id,
@@ -102,6 +149,9 @@ export async function bookAppointment({
     },
     qr_reference: qrRef,
   };
+
+  recentBookingsCache.set(dedupeKey, { result: out, timestamp: Date.now() });
+  return out;
 }
 
 export async function getAppointments(filter = {}) {

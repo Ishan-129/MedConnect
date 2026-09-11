@@ -50,22 +50,46 @@ export function getTwilioCredentials(): {
 export async function initiateTwilioVoiceCall(
   payload: TwilioVoiceCallPayload
 ): Promise<TwilioCallRecord> {
-  const { accountSid, authToken, fromPhone, toPhone: defaultToPhone } = getTwilioCredentials();
-  const targetToPhone = payload.toPhone || defaultToPhone;
   const timestamp = new Date().toISOString();
   const reqId = payload.requestId || payload.reqNumber || 'em-unknown';
+  const targetToPhone = payload.toPhone || '+919354543523';
 
-  if (!accountSid || !authToken) {
-    console.warn('[twilioService] TWILIO_NOT_CONFIGURED: Missing VITE_TWILIO_ACCOUNT_SID or VITE_TWILIO_AUTH_TOKEN');
-    return {
-      id: `tw-rec-${Date.now()}`,
-      requestId: reqId,
-      status: 'TWILIO_NOT_CONFIGURED',
-      timestamp,
-      failureReason: 'TWILIO_NOT_CONFIGURED',
-      success: false,
-    };
+  // 1. Try secure backend proxy first (avoids browser CORS and keeps auth tokens server-side)
+  try {
+    const speechMessage = `Emergency Alert Escalation from MedConnect Pulse. Requesting hospital ${
+      payload.requestingHospitalName || 'Hospital'
+    } requires urgent ${payload.quantity ? payload.quantity + ' units of ' : ''}${
+      payload.resourceType || 'resources'
+    }. 3 minute response timeout expired. Immediate coordinator dispatch required.`;
+
+    const res = await fetch('/api/twilio/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        toPhone: targetToPhone,
+        message: speechMessage,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        id: `tw-rec-${Date.now()}`,
+        requestId: reqId,
+        callSid: data.callSid || `call-${Date.now()}`,
+        status: data.status || 'INITIATED',
+        timestamp,
+        toPhone: targetToPhone,
+        fromPhone: '+17372212163',
+        success: true,
+      };
+    }
+  } catch {
+    // Fall through to direct credential check or demo record
   }
+
+  const { accountSid, authToken, fromPhone, toPhone: defaultToPhone } = getTwilioCredentials();
+  const directToPhone = payload.toPhone || defaultToPhone;
 
   try {
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`;

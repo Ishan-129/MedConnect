@@ -1,8 +1,7 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
-import React, { useState } from 'react';
-import { Users, QrCode, Play, CheckCircle2, ChevronRight, Clock, AlertCircle, RefreshCw, UserCheck, Stethoscope } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Users, QrCode, Play, CheckCircle2, ChevronRight, Clock, AlertCircle, RefreshCw, UserCheck, Stethoscope, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { INITIAL_QUEUE } from '../lib/mockData';
 import { QueueEntry, QueueStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import { motionTokens, springs } from '../lib/motionTokens';
@@ -14,14 +13,50 @@ interface QueueViewProps {
 }
 
 export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception', hideRoleSwitcher = false }) => {
-  const { activePatient, openAuthModal } = useAuth();
+  const { activePatient, activeHospital, openAuthModal } = useAuth();
   const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>(defaultRole);
-  const [queue, setQueue] = useState<QueueEntry[]>(INITIAL_QUEUE);
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const hospitalId = activeHospital?.hospital_id || '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0';
+
+  // Fetch live queue from backend
+  const fetchQueue = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/queue/entries?hospitalId=${hospitalId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const entries: QueueEntry[] = data.entries || [];
+        setQueue(entries);
+        setQueueError(null);
+      } else {
+        console.warn('[QueueView] Queue fetch returned', res.status);
+        setQueueError(`Backend returned HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      console.warn('[QueueView] Queue fetch failed:', err?.message);
+      setQueueError('Unable to reach backend — showing last known state.');
+    } finally {
+      setQueueLoading(false);
+    }
+  }, [hospitalId]);
+
+  // Mount: load immediately and start 15s polling
+  useEffect(() => {
+    fetchQueue();
+    pollTimerRef.current = setInterval(fetchQueue, 15000);
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, [fetchQueue]);
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
-  // Call Next Patient (Reception Desk Primary Action)
-  const handleCallNext = () => {
+  // Call Next Patient — optimistic local update, then refresh from backend
+  const handleCallNext = async () => {
+    // Optimistic local update for instant UI feedback
     setQueue((prevQueue) => {
       let foundCalled = false;
       return prevQueue.map((entry) => {
@@ -38,37 +73,86 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
         return entry;
       });
     });
+
+    // Try to persist to backend
+    try {
+      await fetch('/api/queue/call-next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hospitalId }),
+      });
+      // Refresh queue from backend after a short delay
+      setTimeout(fetchQueue, 500);
+    } catch {
+      // Optimistic update stays; backend sync failed silently
+    }
   };
 
-  // Simulate QR Check-In Scanner at Reception Desk
-  const handleSimulateCheckIn = (e: React.FormEvent) => {
+  // QR Check-In: validate token via backend, then add to local queue
+  const handleSimulateCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
     const token = checkInToken.trim().toUpperCase();
     if (!token) return;
 
-    const exists = queue.some((q) => q.token === token);
+    const normalizedToken = token.startsWith('#') ? token : `#${token}`;
+
+    const exists = queue.some((q) => q.token === normalizedToken);
     if (exists) {
-      setCheckInMsg({ text: `Patient ${token} is already checked in and in the queue.`, error: true });
+      setCheckInMsg({ text: `Patient ${normalizedToken} is already checked in and in the queue.`, error: true });
       return;
     }
 
+    // Validate token via backend appointment check
+    try {
+      const res = await fetch(`/api/appointments/check?tokenId=${encodeURIComponent(normalizedToken)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.found && data.appointment) {
+          const appt = data.appointment;
+          const newEntry: QueueEntry = {
+            queue_id: `q-${Date.now()}`,
+            appointment_id: appt.appointment_id || appt.id || `apt-${Date.now()}`,
+            patient_id: appt.patient_id || `pat-${Date.now()}`,
+            patient_name: appt.patient_name || `Checked-In Patient (${normalizedToken})`,
+            doctor_id: appt.doctor_id || '',
+            doctor_name: appt.doctor_name || 'Assigned Doctor',
+            department_name: appt.department_name || 'OPD',
+            token: normalizedToken,
+            position: queue.filter((q) => q.status === 'WAITING').length + 1,
+            check_in_at: new Date().toISOString(),
+            status: 'WAITING',
+            estimated_wait_mins: (queue.filter((q) => q.status === 'WAITING').length + 1) * 10
+          };
+          setQueue((prev) => [...prev, newEntry]);
+          setCheckInMsg({ text: `Check-in verified! ${normalizedToken} enqueued — Patient: ${newEntry.patient_name}.` });
+          setCheckInToken('');
+          return;
+        } else {
+          setCheckInMsg({ text: `No appointment found for token ${normalizedToken}. Please verify the QR pass.`, error: true });
+          return;
+        }
+      }
+    } catch {
+      // Network error — fall back to manual entry below
+    }
+
+    // Fallback: add as walk-in if backend unreachable
     const newEntry: QueueEntry = {
       queue_id: `q-${Date.now()}`,
       appointment_id: `apt-${Date.now()}`,
       patient_id: `pat-${Date.now()}`,
-      patient_name: `Checked-In Patient (${token})`,
-      doctor_id: 'doc-2',
-      doctor_name: 'Dr. Priya Nair',
-      department_name: 'Dermatology',
-      token: token.startsWith('#') ? token : `#${token}`,
+      patient_name: `Walk-in Patient (${normalizedToken})`,
+      doctor_id: '',
+      doctor_name: 'To be assigned',
+      department_name: 'OPD',
+      token: normalizedToken,
       position: queue.filter((q) => q.status === 'WAITING').length + 1,
       check_in_at: new Date().toISOString(),
       status: 'WAITING',
       estimated_wait_mins: (queue.filter((q) => q.status === 'WAITING').length + 1) * 10
     };
-
-    setQueue([...queue, newEntry]);
-    setCheckInMsg({ text: `Check-in verified! ${newEntry.token} enqueued at position ${newEntry.position}.` });
+    setQueue((prev) => [...prev, newEntry]);
+    setCheckInMsg({ text: `Walk-in added: ${normalizedToken} at position ${newEntry.position}. (Backend offline — token not validated)` });
     setCheckInToken('');
   };
 
@@ -320,10 +404,27 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
                     <Users className="w-4 h-4 text-accent" />
                     <span>Checked-In Queue Roster (Realtime FIFO)</span>
                   </h3>
-                  <span className="text-xs font-mono text-ink-muted tabular-nums font-semibold">
-                    {queue.length} Active Records
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    {queueLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />}
+                    <button
+                      onClick={fetchQueue}
+                      className="text-[10px] font-mono text-ink-muted hover:text-accent flex items-center gap-1"
+                      title="Refresh queue"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Refresh
+                    </button>
+                    <span className="text-xs font-mono text-ink-muted tabular-nums font-semibold">
+                      {queue.length} Active Records
+                    </span>
+                  </div>
                 </div>
+                {queueError && (
+                  <div className="text-[11px] font-mono text-amber-400 flex items-center gap-1.5 bg-amber-500/10 px-2 py-1.5 rounded-lg border border-amber-500/20">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    {queueError}
+                  </div>
+                )}
 
                 <div className="pulse-table-container">
                   <table className="pulse-table pulse-table-hover">

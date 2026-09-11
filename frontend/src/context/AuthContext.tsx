@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { HospitalUser, PatientUser, ResourceType } from '../types';
 import { INITIAL_HOSPITALS } from '../lib/mockData';
 import { supabase, isLiveSupabase } from '../lib/supabaseClient';
@@ -113,6 +113,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return DEFAULT_HOSPITALS[0];
     }
   });
+
+  // On mount: attempt to load live hospitals from backend (augments local seed)
+  const loadLiveHospitals = useCallback(async () => {
+    try {
+      const res = await fetch('/api/hospitals');
+      if (res.ok) {
+        const data = await res.json();
+        const liveHospitals: HospitalUser[] = (data.hospitals || []).map((h: any) => ({
+          hospital_id: h.hospital_id || h.id,
+          name: h.name,
+          contact: h.contact || '',
+          telegram_chat_id: h.telegram_chat_id || '',
+          latitude: h.latitude || 0,
+          longitude: h.longitude || 0,
+          address: h.address || '',
+          contact_email: h.contact_email || '',
+          contact_person: h.contact_person || '',
+          verification_status: h.verification_status || 'VERIFIED',
+          supported_resources: h.supported_resources || [],
+        }));
+        if (liveHospitals.length > 0) {
+          // Merge: live DB hospitals take precedence; keep any local-only ones
+          setAllHospitals((prev) => {
+            const existingIds = new Set(liveHospitals.map(h => h.hospital_id));
+            const localOnly = prev.filter(h => !existingIds.has(h.hospital_id));
+            return [...liveHospitals, ...localOnly];
+          });
+          // If no active hospital session yet, use first live hospital
+          setActiveHospital((prev) => prev || liveHospitals[0]);
+        }
+      }
+    } catch {
+      // Backend not available — local seed data is the fallback
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLiveHospitals();
+  }, [loadLiveHospitals]);
 
   // Registered patients
   const [allPatients, setAllPatients] = useState<PatientUser[]>(() => {
@@ -287,11 +326,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveHospital(null);
   };
 
-  // Patient Login
+  // Patient Login — try live backend first, fall back to local roster
   const loginPatient = async (phone: string, _password?: string) => {
     const cleanPhone = phone.trim().replace(/\s+/g, '');
-    const found = allPatients.find((p) => p.phone.replace(/\s+/g, '').includes(cleanPhone));
 
+    // Try backend patient search first
+    try {
+      const res = await fetch(`/api/patients/search?phone=${encodeURIComponent(cleanPhone)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const patients: any[] = data.patients || [];
+        const match = patients.find((p: any) =>
+          (p.phone || '').replace(/\s+/g, '').includes(cleanPhone)
+        );
+        if (match) {
+          const livePatient: PatientUser = {
+            patient_id: match.patient_id || match.id || `pat-${Date.now()}`,
+            name: match.name,
+            phone: match.phone,
+            email: match.email,
+            blood_group: match.blood_group || 'O+',
+            age: match.age,
+            gender: match.gender,
+            emergency_contact_name: match.emergency_contact_name,
+            emergency_contact_phone: match.emergency_contact_phone,
+            address: match.address,
+          };
+          // Merge into local roster
+          setAllPatients((prev) => {
+            const exists = prev.find(p => p.patient_id === livePatient.patient_id);
+            return exists ? prev : [livePatient, ...prev];
+          });
+          setActivePatient(livePatient);
+          return { success: true };
+        }
+      }
+    } catch {
+      // Backend unavailable — fall through to local
+    }
+
+    // Fall back to local patient roster
+    const found = allPatients.find((p) => p.phone.replace(/\s+/g, '').includes(cleanPhone));
     if (found) {
       setActivePatient(found);
       return { success: true };

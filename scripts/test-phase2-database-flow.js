@@ -274,6 +274,7 @@ async function runPhase2DatabaseTests() {
     const turn1 = await processReceptionistTurn({
       channel: 'text',
       text: 'Mujhe doctor se milna hai',
+      useN8n: false,
     });
 
     // Turn 2: Select doctor from real DB
@@ -281,6 +282,7 @@ async function runPhase2DatabaseTests() {
       channel: 'text',
       text: `Dr. Ananya Roy se appointment chahiye`,
       context: turn1.context,
+      useN8n: false,
     });
 
     // Turn 3: Pick available slot
@@ -289,6 +291,7 @@ async function runPhase2DatabaseTests() {
       channel: 'text',
       text: `${slotToPick}`,
       context: turn2.context,
+      useN8n: false,
     });
 
     const isBooked = turn3.status === 'ACTION_COMPLETED' && Boolean(turn3.actionPayload?.appointment);

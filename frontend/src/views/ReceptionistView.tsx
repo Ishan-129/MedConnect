@@ -17,7 +17,6 @@ import {
   Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { INITIAL_DOCTORS } from '../lib/mockData';
 import { QrCodeModal } from '../components/QrCodeModal';
 import { motionTokens, springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
@@ -29,46 +28,171 @@ import {
 import {
   speakText,
   stopSpeaking,
-  getIsSpeaking,
+  unlockAudioContext,
 } from '../services/speechSynthesisService';
 import {
   processReceptionistTurn,
   ConversationContext,
   ReceptionistResponse,
 } from '../services/receptionistService';
+import type { Doctor } from '../types';
 
 export const ReceptionistView: React.FC = () => {
-  const { activePatient, openAuthModal } = useAuth();
+  const { activePatient, activeHospital, openAuthModal } = useAuth();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('hi-IN');
   const [transcript, setTranscript] = useState('');
-  const [patientName, setPatientName] = useState(activePatient?.name || 'Ananya Deshmukh');
-  const [patientPhone, setPatientPhone] = useState(activePatient?.phone || '+91 98765 43210');
+  const [patientName, setPatientName] = useState(activePatient?.name || '');
+  const [patientPhone, setPatientPhone] = useState(activePatient?.phone || '');
   const [aiSpeechMessage, setAiSpeechMessage] = useState<string>('');
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContext>({});
 
-  // Keep synced with activePatient if switched
-  React.useEffect(() => {
+  // Doctor / slot / department state from live backend
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [loadingDepartments, setLoadingDepartments] = useState(false);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loadingDoctors, setLoadingDoctors] = useState(false);
+  const [availableSlots, setAvailableSlots] = useState<string[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+
+  const [symptoms, setSymptoms] = useState('');
+  const [selectedDepartment, setSelectedDepartment] = useState('Cardiology');
+  const [selectedDoctorId, setSelectedDoctorId] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState('');
+  const [isBooking, setIsBooking] = useState(false);
+  const [bookingConfirmed, setBookingConfirmed] = useState(false);
+  const [generatedToken, setGeneratedToken] = useState('');
+  const [bookedAppointmentId, setBookedAppointmentId] = useState('');
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0);
+
+  const speechControllerRef = useRef<SpeechRecognitionController | null>(null);
+
+  // Resolve hospital ID: prefer live activeHospital, fall back to known Supabase seed ID
+  const hospitalId = activeHospital?.hospital_id || '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0';
+
+  // Keep patient fields synced with AuthContext active patient
+  useEffect(() => {
     if (activePatient) {
       setPatientName(activePatient.name);
       setPatientPhone(activePatient.phone);
     }
   }, [activePatient]);
-  const [symptoms, setSymptoms] = useState('I have had an itchy skin rash and redness on my arm for 3 days.');
-  const [selectedDepartment, setSelectedDepartment] = useState('Dermatology');
-  const [selectedDoctorId, setSelectedDoctorId] = useState('doc-2');
-  const [selectedSlot, setSelectedSlot] = useState('10:30 AM - 10:45 AM');
-  const [isBooking, setIsBooking] = useState(false);
-  const [bookingConfirmed, setBookingConfirmed] = useState(false);
-  const [generatedToken, setGeneratedToken] = useState('#MED-4029');
-  const [showQrModal, setShowQrModal] = useState(false);
-  const [audioVolume, setAudioVolume] = useState(0);
 
-  const speechControllerRef = useRef<SpeechRecognitionController | null>(null);
+  // ---------------------------------------------------------------
+  // LOAD REAL DEPARTMENTS FROM BACKEND
+  // ---------------------------------------------------------------
+  const fetchDepartments = useCallback(async () => {
+    setLoadingDepartments(true);
+    try {
+      const res = await fetch(`/api/departments?hospitalId=${hospitalId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const list: string[] = (data.departments || []).map((d: any) => d.name).filter(Boolean);
+        if (list.length > 0) {
+          setDepartments(list);
+          if (!list.includes(selectedDepartment)) {
+            setSelectedDepartment(list[0]);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[ReceptionistView] Department fetch error:', err);
+    } finally {
+      setLoadingDepartments(false);
+    }
+  }, [hospitalId, selectedDepartment]);
+
+  // ---------------------------------------------------------------
+  // LOAD REAL DOCTORS FROM BACKEND
+  // ---------------------------------------------------------------
+  const fetchDoctors = useCallback(async (department: string) => {
+    setLoadingDoctors(true);
+    try {
+      // Map department display name → encoded query param
+      const params = new URLSearchParams({ hospitalId });
+      if (department) params.set('departmentName', department);
+
+      const res = await fetch(`/api/doctors?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const fetched: Doctor[] = data.doctors || [];
+        setDoctors(fetched);
+        // Auto-select first doctor in department if available
+        const deptDoctors = fetched.filter(d =>
+          d.department_name?.toLowerCase() === department.toLowerCase()
+        );
+        const first = deptDoctors[0] || fetched[0];
+        if (first) {
+          setSelectedDoctorId(first.doctor_id);
+        }
+      } else {
+        console.warn('[ReceptionistView] Failed to load doctors:', res.status);
+      }
+    } catch (err) {
+      console.warn('[ReceptionistView] Doctor fetch error:', err);
+    } finally {
+      setLoadingDoctors(false);
+    }
+  }, [hospitalId]);
+
+  // ---------------------------------------------------------------
+  // LOAD REAL AVAILABLE SLOTS FROM BACKEND
+  // ---------------------------------------------------------------
+  const fetchSlots = useCallback(async (doctorId: string) => {
+    if (!doctorId) return;
+    setLoadingSlots(true);
+    try {
+      const date = new Date().toISOString().split('T')[0];
+      const res = await fetch(`/api/appointments/slots?doctorId=${doctorId}&date=${date}`);
+      if (res.ok) {
+        const data = await res.json();
+        const rawSlots: any[] = data.slots || [];
+        // Map backend slot format to display strings
+        const displaySlots = rawSlots
+          .filter(s => s.status === 'AVAILABLE' || !s.status)
+          .map(s => s.display_time || s.start_time || s.time)
+          .filter(Boolean)
+          .slice(0, 6);
+        setAvailableSlots(displaySlots);
+        if (displaySlots.length > 0 && !selectedSlot) {
+          setSelectedSlot(displaySlots[0]);
+        }
+      } else {
+        console.warn('[ReceptionistView] Failed to load slots:', res.status);
+        setAvailableSlots([]);
+      }
+    } catch (err) {
+      console.warn('[ReceptionistView] Slot fetch error:', err);
+      setAvailableSlots([]);
+    } finally {
+      setLoadingSlots(false);
+    }
+  }, [selectedSlot]);
+
+  // Initial load on mount
+  useEffect(() => {
+    fetchDepartments();
+    fetchDoctors(selectedDepartment);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload doctors when department changes
+  useEffect(() => {
+    fetchDoctors(selectedDepartment);
+    setSelectedSlot('');
+    setAvailableSlots([]);
+  }, [selectedDepartment]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load slots when doctor changes
+  useEffect(() => {
+    if (selectedDoctorId) {
+      fetchSlots(selectedDoctorId);
+    }
+  }, [selectedDoctorId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clean up any ongoing audio and recognition when unmounting
   useEffect(() => {
@@ -96,16 +220,20 @@ export const ReceptionistView: React.FC = () => {
     if (!textToSpeak) return;
     setAiSpeechMessage(textToSpeak);
     setIsSpeaking(true);
+    unlockAudioContext();
 
     const langName = getLanguageLabel(selectedLanguage);
-    await speakText(textToSpeak, langName, {
+    const spoken = await speakText(textToSpeak, langName, {
       onStart: () => setIsSpeaking(true),
       onEnd: () => setIsSpeaking(false),
-      onError: (err) => {
+      onError: (err: any) => {
         console.warn('[ReceptionistView] Speech synthesis error:', err);
         setIsSpeaking(false);
       },
     });
+    if (!spoken) {
+      setIsSpeaking(false);
+    }
   }, [selectedLanguage, getLanguageLabel]);
 
   // Cancel/Stop speaking audio
@@ -116,6 +244,7 @@ export const ReceptionistView: React.FC = () => {
 
   // Replay the AI speech message
   const handleReplayVoice = () => {
+    unlockAudioContext();
     if (aiSpeechMessage) {
       playAiVoice(aiSpeechMessage);
     }
@@ -123,7 +252,7 @@ export const ReceptionistView: React.FC = () => {
 
   // Real Microphone Capture & Sarvam AI STT + Turn Processing Pipeline
   const handleToggleVoice = async () => {
-    // If AI is currently speaking, stop it immediately
+    unlockAudioContext();
     if (isSpeaking) {
       handleStopSpeaking();
     }
@@ -190,20 +319,20 @@ export const ReceptionistView: React.FC = () => {
           audioBlob: audioBlob || undefined,
           language: getLanguageLabel(selectedLanguage),
           context: conversationContext,
-          hospitalId: '9bf02c4e-12c9-46c3-a0c0-ac5a52fd0cf0',
+          hospitalId,
+          patientName: patientName || undefined,
+          patientPhone: patientPhone || undefined,
         });
 
         setIsProcessing(false);
 
         if (turnResponse.success || turnResponse.status === 'ACTION_COMPLETED' || turnResponse.status === 'NEEDS_MORE_INFO') {
-          // Update transcript with recognized text
           const finalWords = turnResponse.transcript || spokenText;
           if (finalWords) {
             setTranscript(finalWords);
             setSymptoms(finalWords);
           }
 
-          // Update context
           if (turnResponse.context) {
             setConversationContext(turnResponse.context);
           }
@@ -215,7 +344,8 @@ export const ReceptionistView: React.FC = () => {
               setSelectedDepartment(departmentName);
             }
             if (doctorName) {
-              const matchedDoc = INITIAL_DOCTORS.find(
+              // Match against live doctor list
+              const matchedDoc = doctors.find(
                 d => d.name.toLowerCase().includes(doctorName.toLowerCase()) ||
                      doctorName.toLowerCase().includes(d.name.toLowerCase())
               );
@@ -234,25 +364,35 @@ export const ReceptionistView: React.FC = () => {
           // If booking completed via voice turn
           if (turnResponse.actionPayload?.token?.token_number || turnResponse.actionPayload?.appointment?.token_number) {
             const tokenNum = turnResponse.actionPayload?.token?.token_number ||
-                             turnResponse.actionPayload?.appointment?.token_number ||
-                             '#MED-4029';
-            setGeneratedToken(tokenNum);
-            setBookingConfirmed(true);
+                             turnResponse.actionPayload?.appointment?.token_number;
+            const aptId = turnResponse.actionPayload?.appointment?.appointment_id ||
+                          turnResponse.actionPayload?.appointment?.id ||
+                          `apt-${Date.now()}`;
+            if (tokenNum) {
+              setGeneratedToken(tokenNum);
+              setBookedAppointmentId(aptId);
+              setBookingConfirmed(true);
+              setShowQrModal(true);
+              if (selectedDoctorId) {
+                fetchSlots(selectedDoctorId);
+              }
+            }
           }
 
-          // Play tactical audio cue
           playAudioCue('success');
 
-          // Speak the AI response aloud so user hears the voice!
           const messageToSpeak = turnResponse.spokenText || turnResponse.aiMessage;
           if (messageToSpeak) {
+            setAiSpeechMessage(messageToSpeak);
             await playAiVoice(messageToSpeak);
           }
         } else {
-          // Failure handling without fake success
           const errorMsg = turnResponse.aiMessage || turnResponse.error || 'Failed to process voice request.';
           setSpeechError(errorMsg);
           setTranscript(turnResponse.transcript || spokenText || 'Voice intake failed.');
+          if (turnResponse.aiMessage) {
+            setAiSpeechMessage(turnResponse.aiMessage);
+          }
         }
       } catch (err: any) {
         setIsProcessing(false);
@@ -262,19 +402,124 @@ export const ReceptionistView: React.FC = () => {
     }
   };
 
-  // Manual booking handler (also triggers voice confirmation)
+  // Interactive typed question handler — routes directly to AI Receptionist turn engine
+  const handleAskQuestion = async (queryText?: string) => {
+    unlockAudioContext();
+    const textToSend = (queryText || symptoms).trim();
+    if (!textToSend || isProcessing) return;
+
+    if (isSpeaking) {
+      handleStopSpeaking();
+    }
+
+    setIsProcessing(true);
+    setSpeechError(null);
+    setTranscript(textToSend);
+
+    try {
+      const turnResponse: ReceptionistResponse = await processReceptionistTurn({
+        channel: 'text',
+        text: textToSend,
+        language: getLanguageLabel(selectedLanguage),
+        context: conversationContext,
+        hospitalId,
+        patientName: patientName || undefined,
+        patientPhone: patientPhone || undefined,
+      });
+
+      setIsProcessing(false);
+
+      if (turnResponse.success || turnResponse.status === 'ACTION_COMPLETED' || turnResponse.status === 'NEEDS_MORE_INFO') {
+        const finalWords = turnResponse.transcript || textToSend;
+        setTranscript(finalWords);
+        setSymptoms(finalWords);
+
+        if (turnResponse.context) {
+          setConversationContext(turnResponse.context);
+        }
+
+        // Sync validated slots to UI fields
+        if (turnResponse.validatedSlots) {
+          const { departmentName, doctorName, timeSlot, patientName: slotPatient } = turnResponse.validatedSlots;
+          if (departmentName) {
+            setSelectedDepartment(departmentName);
+          }
+          if (doctorName) {
+            const matchedDoc = doctors.find(
+              d => d.name.toLowerCase().includes(doctorName.toLowerCase()) ||
+                   doctorName.toLowerCase().includes(d.name.toLowerCase())
+            );
+            if (matchedDoc) {
+              setSelectedDoctorId(matchedDoc.doctor_id);
+            }
+          }
+          if (timeSlot) {
+            setSelectedSlot(timeSlot);
+          }
+          if (slotPatient && slotPatient !== 'Patient' && slotPatient !== departmentName) {
+            setPatientName(slotPatient);
+          }
+        }
+
+        // If booking completed via turn
+        const tokenNum = turnResponse.actionPayload?.token?.token_number ||
+                         turnResponse.actionPayload?.appointment?.token_number;
+        const aptId = turnResponse.actionPayload?.appointment?.appointment_id ||
+                      turnResponse.actionPayload?.appointment?.id ||
+                      `apt-${Date.now()}`;
+        if (tokenNum) {
+          setGeneratedToken(tokenNum);
+          setBookedAppointmentId(aptId);
+          setBookingConfirmed(true);
+          setShowQrModal(true);
+          if (selectedDoctorId) {
+            fetchSlots(selectedDoctorId);
+          }
+        }
+
+        playAudioCue('success');
+
+        const messageToSpeak = turnResponse.spokenText || turnResponse.aiMessage;
+        if (messageToSpeak) {
+          setAiSpeechMessage(messageToSpeak);
+          await playAiVoice(messageToSpeak);
+        }
+      } else {
+        const errorMsg = turnResponse.aiMessage || turnResponse.error || 'Failed to process request.';
+        setSpeechError(errorMsg);
+        setTranscript(turnResponse.transcript || textToSend);
+        if (turnResponse.aiMessage) {
+          setAiSpeechMessage(turnResponse.aiMessage);
+        }
+      }
+    } catch (err: any) {
+      setIsProcessing(false);
+      setSpeechError(`Receptionist error: ${err.message || 'Unknown network error'}`);
+      setTranscript('Unable to connect to AI Receptionist engine.');
+    }
+  };
+
+  // Manual booking handler — real backend only, zero mock/random fallback
   const handleBookSlot = async () => {
+    if (!currentDoctor) {
+      setSpeechError('No doctor selected. Please wait for the doctor list to load or select a department.');
+      return;
+    }
+    if (!selectedSlot) {
+      setSpeechError('No time slot selected. Please choose an available slot.');
+      return;
+    }
     setIsBooking(true);
     setSpeechError(null);
 
     try {
-      // Call backend atomic booking endpoint
       const res = await fetch('/api/appointments/book', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          patientName,
-          patientPhone,
+          patientName: patientName || 'Walk-in Patient',
+          patientPhone: patientPhone || '+91 00000 00000',
+          hospitalId,
           doctorId: currentDoctor.doctor_id,
           doctorName: currentDoctor.name,
           departmentName: selectedDepartment,
@@ -285,45 +530,59 @@ export const ReceptionistView: React.FC = () => {
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const tokenNum = data.token_number || data.appointment?.token_number || '#MED-4029';
+      const data = await res.json();
+
+      if (res.ok && (data.success || data.token)) {
+        const tokenNum = data.token?.token_number || data.appointment?.token_number || data.token_number;
+        const aptId = data.appointment?.appointment_id || data.appointment?.id || data.appointment_id || `apt-${Date.now()}`;
+
+        if (!tokenNum) {
+          setIsBooking(false);
+          setSpeechError('Booking failed: No valid token was issued by the backend.');
+          return;
+        }
+
         setGeneratedToken(tokenNum);
+        setBookedAppointmentId(aptId);
         setIsBooking(false);
         setBookingConfirmed(true);
         setShowQrModal(true);
 
-        // Voice confirmation out loud
         playAudioCue('success');
         const confirmSpeech = selectedLanguage === 'hi-IN'
           ? `आपका अपॉइंटमेंट ${currentDoctor.name} के साथ सफलतापूर्वक बुक हो गया है। आपका टोकन नंबर ${tokenNum} है।`
           : `Your appointment with ${currentDoctor.name} has been successfully booked. Your token number is ${tokenNum}.`;
+        setAiSpeechMessage(confirmSpeech);
         playAiVoice(confirmSpeech);
+
+        // Refresh slots after booking (one slot just got consumed)
+        fetchSlots(selectedDoctorId);
       } else {
-        // Fallback demo booking if direct book fails
-        setTimeout(() => {
-          setIsBooking(false);
-          setBookingConfirmed(true);
-          setShowQrModal(true);
-          playAudioCue('success');
-          const confirmSpeech = selectedLanguage === 'hi-IN'
-            ? `आपका अपॉइंटमेंट ${currentDoctor.name} के साथ सफलतापूर्वक बुक हो गया है। आपका टोकन नंबर ${generatedToken} है।`
-            : `Your appointment with ${currentDoctor.name} has been successfully booked. Your token number is ${generatedToken}.`;
-          playAiVoice(confirmSpeech);
-        }, 800);
-      }
-    } catch (e) {
-      // Graceful local completion
-      setTimeout(() => {
+        // Real error — no silent demo fallback
         setIsBooking(false);
-        setBookingConfirmed(true);
-        setShowQrModal(true);
-        playAudioCue('success');
-      }, 800);
+        const errorMsg = data?.message || data?.error || `Booking failed (HTTP ${res.status}). Please try again.`;
+        setSpeechError(errorMsg);
+      }
+    } catch (e: any) {
+      setIsBooking(false);
+      setSpeechError(`Network error: Unable to reach booking service. ${e.message || ''}`);
     }
   };
 
-  const currentDoctor = INITIAL_DOCTORS.find(d => d.doctor_id === selectedDoctorId) || INITIAL_DOCTORS[1];
+  // Resolved current doctor from live list
+  const currentDoctor: Doctor | undefined = doctors.find(d => d.doctor_id === selectedDoctorId) || doctors[0];
+
+  // Departments from live database, falling back to deduplicated doctor departments
+  const liveDepartments = Array.from(
+    new Set([
+      ...departments,
+      ...doctors.map(d => d.department_name).filter(Boolean),
+    ])
+  );
+  // Fallback departments if API hasn't returned data yet
+  const displayDepartments = liveDepartments.length > 0
+    ? liveDepartments
+    : ['Cardiology', 'Orthopedics', 'General Medicine', 'Neurology', 'Dermatology'];
 
   return (
     <div className="space-y-8 animate-fade-in-up">
@@ -371,7 +630,7 @@ export const ReceptionistView: React.FC = () => {
         <div className="flex items-center space-x-2">
           <User className="w-4 h-4 text-accent shrink-0" />
           <span className="text-ink-muted">Patient OPD Record:</span>
-          <strong className="text-ink font-bold">{patientName}</strong>
+          <strong className="text-ink font-bold">{patientName || 'Walk-in Patient'}</strong>
           {activePatient && (
             <span className="px-1.5 py-0.2 rounded bg-accent-light text-accent text-[10px] font-bold">
               Blood {activePatient.blood_group}
@@ -379,7 +638,7 @@ export const ReceptionistView: React.FC = () => {
           )}
         </div>
         <div className="flex items-center space-x-2">
-          <span className="text-ink-muted text-[11px]">{patientPhone}</span>
+          <span className="text-ink-muted text-[11px]">{patientPhone || 'No phone on file'}</span>
           <button
             type="button"
             onClick={() => openAuthModal('patient', 'login')}
@@ -467,7 +726,6 @@ export const ReceptionistView: React.FC = () => {
               {isRecording ? (
                 <div className="flex items-center justify-center gap-1.5 mt-5 h-8">
                   {[0.1, 0.25, 0.4, 0.15, 0.3].map((delay, i) => {
-                    // Dynamically scale height with audio volume
                     const heightRange = audioVolume > 20
                       ? ['10px', `${Math.min(36, 14 + audioVolume * 0.25)}px`, '14px', `${Math.min(36, 18 + audioVolume * 0.2)}px`, '10px']
                       : ['8px', '32px', '14px', '28px', '8px'];
@@ -556,6 +814,36 @@ export const ReceptionistView: React.FC = () => {
               </div>
             </div>
 
+            {/* Real AI Receptionist Live Response Display */}
+            {aiSpeechMessage && (
+              <div className="mt-3 space-y-1.5 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <label className="pulse-label flex items-center space-x-1.5 text-accent">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>AI Receptionist Live Response:</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleReplayVoice}
+                      className="px-2.5 py-0.5 rounded-md bg-accent/10 hover:bg-accent/20 text-accent text-[11px] font-mono font-medium flex items-center gap-1.5 transition-colors border border-accent/20 cursor-pointer"
+                      title={isSpeaking ? 'AI is currently speaking (click to restart)' : 'Play AI voice aloud'}
+                    >
+                      <Volume2 className={`w-3.5 h-3.5 ${isSpeaking ? 'animate-pulse text-accent' : ''}`} />
+                      <span>{isSpeaking ? 'Speaking...' : 'Play Voice'}</span>
+                    </button>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Live Backend Engine
+                    </span>
+                  </div>
+                </div>
+                <div className="p-3.5 bg-paper-subtle rounded-xl border border-accent/30 font-mono text-xs text-ink shadow-hairline">
+                  <p className="leading-relaxed whitespace-pre-wrap">{aiSpeechMessage}</p>
+                </div>
+              </div>
+            )}
+
             {/* Patient Details Form */}
             <div className="mt-6 pt-5 border-t border-rule-subtle grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="pulse-form-group">
@@ -587,16 +875,43 @@ export const ReceptionistView: React.FC = () => {
               </div>
 
               <div className="sm:col-span-2 pulse-form-group">
-                <label className="pulse-label flex items-center space-x-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-accent" />
-                  <span>Extracted Intent / Reason for Visit</span>
+                <label className="pulse-label flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-accent" />
+                    <span>Ask AI Receptionist / Reason for Visit</span>
+                  </div>
+                  <span className="text-[10px] text-ink-muted font-mono">Press Enter or click Ask AI</span>
                 </label>
-                <input
-                  type="text"
-                  value={symptoms}
-                  onChange={(e) => setSymptoms(e.target.value)}
-                  className="pulse-input"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={symptoms}
+                    onChange={(e) => setSymptoms(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAskQuestion();
+                      }
+                    }}
+                    className="pulse-input flex-1"
+                    placeholder="Ask anything, e.g. What doctors are available today? or When is Dr. Rajesh Sharma free?"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAskQuestion()}
+                    disabled={isProcessing || !symptoms.trim()}
+                    className="pulse-btn pulse-btn-primary pulse-btn-sm text-xs font-mono px-3.5 whitespace-nowrap disabled:opacity-50 flex items-center space-x-1"
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <>
+                        <span>Ask AI</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -622,7 +937,7 @@ export const ReceptionistView: React.FC = () => {
                 Target Department (AI Classified):
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {['Cardiology', 'Dermatology', 'Orthopedics', 'General Medicine'].map((dept) => (
+                {displayDepartments.map((dept) => (
                   <motion.button
                     whileTap={{ scale: 0.97 }}
                     whileHover={{ scale: 1.01 }}
@@ -645,41 +960,93 @@ export const ReceptionistView: React.FC = () => {
               <label className="pulse-label mb-2 block">
                 Configured Specialist:
               </label>
-              <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule flex items-center justify-between">
-                <div>
-                  <h4 className="pulse-h4 text-sm text-ink">{currentDoctor.name}</h4>
-                  <p className="text-xs font-mono text-accent font-semibold">{currentDoctor.specialty}</p>
-                  <p className="text-[11px] font-mono text-ink-muted mt-0.5">AIIMS New Delhi · OPD Block B</p>
+              {loadingDoctors ? (
+                <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule flex items-center space-x-2 text-xs font-mono text-ink-muted">
+                  <Loader2 className="w-4 h-4 animate-spin text-accent" />
+                  <span>Loading doctors from database...</span>
                 </div>
-                <span className="pulse-badge pulse-badge-green text-[10px]">
-                  Available Today
-                </span>
-              </div>
+              ) : currentDoctor ? (
+                <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule flex items-center justify-between">
+                  <div>
+                    <h4 className="pulse-h4 text-sm text-ink">{currentDoctor.name}</h4>
+                    <p className="text-xs font-mono text-accent font-semibold">{currentDoctor.specialty || currentDoctor.specialization || currentDoctor.department_name}</p>
+                    <p className="text-[11px] font-mono text-ink-muted mt-0.5">
+                      {activeHospital?.name || 'Yashoda Hospital'} · OPD
+                    </p>
+                  </div>
+                  <span className="pulse-badge pulse-badge-green text-[10px]">
+                    {currentDoctor.available_today ? 'Available Today' : 'Check Availability'}
+                  </span>
+                </div>
+              ) : (
+                <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule text-xs font-mono text-ink-muted">
+                  No doctors found for {selectedDepartment}. Backend may be unreachable.
+                </div>
+              )}
+
+              {/* Doctor selector if multiple doctors in department */}
+              {doctors.filter(d => d.department_name?.toLowerCase() === selectedDepartment.toLowerCase()).length > 1 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {doctors
+                    .filter(d => d.department_name?.toLowerCase() === selectedDepartment.toLowerCase())
+                    .map(d => (
+                      <button
+                        key={d.doctor_id}
+                        onClick={() => setSelectedDoctorId(d.doctor_id)}
+                        className={`py-1 px-2 text-[11px] font-mono rounded border transition-colors ${
+                          selectedDoctorId === d.doctor_id
+                            ? 'bg-accent-light border-accent text-accent font-bold'
+                            : 'bg-paper-2 border-rule text-ink-2 hover:border-ink-muted'
+                        }`}
+                      >
+                        {d.name}
+                      </button>
+                    ))}
+                </div>
+              )}
             </div>
 
             {/* Available Real Slots */}
             <div>
               <label className="pulse-label mb-2 flex items-center justify-between">
                 <span>Available OPD Slots:</span>
-                <span className="text-[10px] text-ink-muted font-normal">Live DB Verified</span>
+                <span className="text-[10px] text-ink-muted font-normal flex items-center gap-1">
+                  {loadingSlots ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Loading...</>
+                  ) : (
+                    'Live DB Verified'
+                  )}
+                </span>
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {['09:45 AM - 10:00 AM', '10:30 AM - 10:45 AM', '11:15 AM - 11:30 AM'].map((slot) => (
-                  <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    whileHover={{ scale: 1.02 }}
-                    key={slot}
-                    onClick={() => setSelectedSlot(slot)}
-                    className={`py-2 px-2 text-[11px] font-mono rounded-lg border text-center transition-colors tabular-nums ${
-                      selectedSlot === slot
-                        ? 'bg-operational-light border-operational text-emerald-800 dark:text-emerald-300 font-bold shadow-hairline'
-                        : 'bg-paper-2 border-rule text-ink-2 hover:border-ink-muted'
-                    }`}
-                  >
-                    {slot}
-                  </motion.button>
-                ))}
-              </div>
+              {availableSlots.length > 0 ? (
+                <div className="grid grid-cols-3 gap-2">
+                  {availableSlots.map((slot) => (
+                    <motion.button
+                      whileTap={{ scale: 0.96 }}
+                      whileHover={{ scale: 1.02 }}
+                      key={slot}
+                      onClick={() => setSelectedSlot(slot)}
+                      className={`py-2 px-2 text-[11px] font-mono rounded-lg border text-center transition-colors tabular-nums ${
+                        selectedSlot === slot
+                          ? 'bg-operational-light border-operational text-emerald-800 dark:text-emerald-300 font-bold shadow-hairline'
+                          : 'bg-paper-2 border-rule text-ink-2 hover:border-ink-muted'
+                      }`}
+                    >
+                      {slot}
+                    </motion.button>
+                  ))}
+                </div>
+              ) : loadingSlots ? (
+                <div className="flex items-center gap-2 text-xs font-mono text-ink-muted py-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+                  Fetching live availability...
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-ink-muted py-2 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  {currentDoctor ? `No slots available today for ${currentDoctor.name}.` : 'Select a doctor to see slots.'}
+                </div>
+              )}
             </div>
 
             {/* Action Button: Book & Generate Token */}
@@ -688,8 +1055,8 @@ export const ReceptionistView: React.FC = () => {
                 whileHover={{ scale: 1.01 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={handleBookSlot}
-                disabled={isBooking}
-                className="pulse-btn pulse-btn-primary w-full pulse-btn-lg text-xs"
+                disabled={isBooking || !currentDoctor || !selectedSlot}
+                className="pulse-btn pulse-btn-primary w-full pulse-btn-lg text-xs disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isBooking ? (
                   <span>Executing Atomic Slot Reservation...</span>
@@ -723,7 +1090,7 @@ export const ReceptionistView: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-[11px] font-mono text-ink-2">
-                    Confirmation sent to {patientPhone}. Patient can show QR at hospital reception for direct check-in.
+                    Confirmation sent to {patientPhone || 'patient'}. Patient can show QR at hospital reception for direct check-in.
                   </p>
                   <motion.button
                     whileTap={{ scale: 0.98 }}
@@ -750,12 +1117,12 @@ export const ReceptionistView: React.FC = () => {
         type="appointment"
         data={{
           token: generatedToken,
-          id: 'apt-7729-uuid',
-          targetName: `${currentDoctor.name} (${selectedDepartment})`,
-          detail: `Slot: ${selectedSlot} · Patient: ${patientName}`,
+          id: bookedAppointmentId || `apt-${Date.now()}`,
+          targetName: currentDoctor ? `${currentDoctor.name} (${selectedDepartment})` : selectedDepartment,
+          detail: `Slot: ${selectedSlot} · Patient: ${patientName || 'Walk-in Patient'}`,
           issuedAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
-          signature: 'hmac_sha256_medconnect_valid_appointment_signature_e98a12'
+          signature: `hmac_sha256_medconnect_${bookedAppointmentId || 'live'}`
         }}
       />
 

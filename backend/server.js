@@ -38,6 +38,37 @@ if (fs.existsSync(envPath)) {
 
 const PORT = Number(process.env.PORT) || 3001;
 
+// In-memory sliding window rate limiter
+const rateLimitMap = new Map();
+
+function checkRateLimit(ip, isAiEndpoint) {
+  const now = Date.now();
+  const limit = isAiEndpoint ? 60 : 180; // reqs per minute
+  const windowMs = 60 * 1000;
+
+  // Clean stale keys periodically
+  if (rateLimitMap.size > 2000) {
+    for (const [k, v] of rateLimitMap.entries()) {
+      if (now - v.resetTime > windowMs) rateLimitMap.delete(k);
+    }
+  }
+
+  let record = rateLimitMap.get(ip);
+  if (!record || now - record.resetTime > windowMs) {
+    record = { count: 1, resetTime: now };
+    rateLimitMap.set(ip, record);
+    return true;
+  }
+
+  record.count += 1;
+  return record.count <= limit;
+}
+
+function sanitizeString(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/[<>]/g, '').trim();
+}
+
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -78,6 +109,13 @@ const server = http.createServer(async (req, res) => {
 
   const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = reqUrl.pathname;
+  const clientIp = req.socket.remoteAddress || '127.0.0.1';
+
+  // Apply rate limiting
+  const isAi = pathname.startsWith('/api/receptionist') || pathname.startsWith('/api/sarvam') || pathname.startsWith('/api/openai');
+  if (!checkRateLimit(clientIp, isAi)) {
+    return sendJson(res, 429, { error: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Please retry in a moment.' });
+  }
 
   try {
     // -------------------------------------------------------------
@@ -113,6 +151,10 @@ const server = http.createServer(async (req, res) => {
         audioBlob: body.audioBlob,
         language: body.language || 'Hinglish',
         hospitalId: body.hospitalId,
+        patientName: body.patientName,
+        patientPhone: body.patientPhone,
+        useN8n: body.useN8n ?? true,
+        routeViaN8n: body.routeViaN8n ?? true,
         context: body.context,
       });
       return sendJson(res, 200, result);
@@ -126,6 +168,10 @@ const server = http.createServer(async (req, res) => {
         text: body.text,
         language: body.language || 'Hinglish',
         hospitalId: body.hospitalId,
+        patientName: body.patientName,
+        patientPhone: body.patientPhone,
+        useN8n: body.useN8n ?? true,
+        routeViaN8n: body.routeViaN8n ?? true,
         context: body.context,
       });
       return sendJson(res, 200, result);
@@ -151,6 +197,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/doctors' && req.method === 'GET') {
       const hospitalId = reqUrl.searchParams.get('hospitalId');
       const departmentId = reqUrl.searchParams.get('departmentId');
+      const departmentName = reqUrl.searchParams.get('departmentName');
       const query = reqUrl.searchParams.get('query');
 
       let doctors;
@@ -158,6 +205,13 @@ const server = http.createServer(async (req, res) => {
         doctors = await searchDoctors(query, hospitalId);
       } else {
         doctors = await getDoctors(hospitalId, departmentId);
+      }
+      if (departmentName && Array.isArray(doctors)) {
+        const dName = departmentName.toLowerCase();
+        doctors = doctors.filter(d =>
+          (d.department_name && d.department_name.toLowerCase().includes(dName)) ||
+          (d.specialization && d.specialization.toLowerCase().includes(dName))
+        );
       }
       return sendJson(res, 200, { doctors });
     }
@@ -240,6 +294,28 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { entries });
     }
 
+    if (pathname === '/api/queue/call-next' && req.method === 'POST') {
+      const body = await readBody(req);
+      const hospitalId = body.hospitalId;
+      const entries = await getQueueEntries(hospitalId);
+
+      // Advance queue state
+      let foundCalled = false;
+      for (const entry of entries) {
+        if (entry.status === 'IN_CONSULTATION') {
+          entry.status = 'COMPLETED';
+        } else if (entry.status === 'CALLED') {
+          entry.status = 'IN_CONSULTATION';
+        } else if (!foundCalled && entry.status === 'WAITING') {
+          foundCalled = true;
+          entry.status = 'CALLED';
+          entry.position = 0;
+        }
+      }
+
+      return sendJson(res, 200, { success: true, entries });
+    }
+
     // -------------------------------------------------------------
     // DUES / FEES
     // -------------------------------------------------------------
@@ -279,16 +355,38 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/openai')) {
       const openai = getOpenAICredentials();
       const body = await readBody(req);
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openai.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
+      try {
+        const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openai.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(6000),
+        });
+        const data = await resp.json();
+        return sendJson(res, resp.status, data);
+      } catch (err) {
+        return sendJson(res, 504, { error: 'OPENAI_GATEWAY_TIMEOUT', message: err.message });
+      }
+    }
+
+    if (pathname === '/api/twilio/call' && req.method === 'POST') {
+      const body = await readBody(req);
+      const { sendTwilioVoiceCall } = await import('./services/notificationService.js');
+      const resCall = await sendTwilioVoiceCall({
+        to: body.toPhone || body.to,
+        message: body.message,
       });
-      const data = await resp.json();
-      return sendJson(res, resp.status, data);
+      return sendJson(res, resCall.sent ? 200 : 500, resCall);
+    }
+
+    if (pathname === '/api/twilio/sms' && req.method === 'POST') {
+      const body = await readBody(req);
+      const { sendTwilioSms } = await import('./services/notificationService.js');
+      const resSms = await sendTwilioSms(body.toPhone || body.to, body.message);
+      return sendJson(res, resSms.sent ? 200 : 500, resSms);
     }
 
     if (pathname === '/api/sarvam/verify' || (pathname.startsWith('/api/sarvam/verify') && (req.method === 'GET' || req.method === 'POST'))) {

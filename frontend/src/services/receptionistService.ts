@@ -28,7 +28,19 @@ export interface ReceptionistInput {
   audioBlob?: Blob | ArrayBuffer | string;
   language?: string;
   hospitalId?: string;
+  patientName?: string;
+  patientPhone?: string;
+  routeViaN8n?: boolean;
   context?: ConversationContext;
+}
+
+async function convertBlobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 export interface ReceptionistResponse {
@@ -57,13 +69,29 @@ export interface ReceptionistResponse {
 export async function processReceptionistTurn(input: ReceptionistInput): Promise<ReceptionistResponse> {
   // 1. Try backend server endpoint
   try {
+    let serializedAudio: string | undefined = undefined;
+    if (typeof Blob !== 'undefined' && input.audioBlob instanceof Blob) {
+      serializedAudio = await convertBlobToBase64(input.audioBlob);
+    } else if (typeof input.audioBlob === 'string') {
+      serializedAudio = input.audioBlob;
+    }
+
+    const payload = {
+      channel: input.channel || (serializedAudio ? 'mic' : 'text'),
+      text: input.text,
+      audioBlob: serializedAudio,
+      language: input.language || 'Hinglish',
+      hospitalId: input.hospitalId,
+      patientName: input.patientName,
+      patientPhone: input.patientPhone,
+      context: input.context,
+      useN8n: input.routeViaN8n ?? true,
+    };
+
     const res = await fetch('/api/receptionist/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...input,
-        useN8n: true,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (res.ok) {

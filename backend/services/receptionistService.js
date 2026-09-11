@@ -7,7 +7,7 @@
 import { db } from '../db.js';
 import { transcribeAudio, getSarvamCredentials } from './sarvamService.js';
 import { extractIntentAndSlots, getOpenAICredentials } from './openaiService.js';
-import { callN8nAiReceptionist } from './n8nService.js';
+import { callN8nAiReceptionist, triggerN8nQueueNotification } from './n8nService.js';
 import { sendAppointmentConfirmation } from './notificationService.js';
 import { generateSignedAppointmentQR } from './qrService.js';
 
@@ -118,6 +118,14 @@ export async function translateAiMessage(message, targetLang = 'Hinglish') {
   if (!message || !targetLang) return message;
   const lang = targetLang.trim();
   if (lang.toLowerCase() === 'hinglish') return message;
+
+  // If already in target language, return directly
+  if (lang.toLowerCase() === 'english' && !(/[\u0900-\u097F]/.test(message))) {
+    return fallbackTranslate(message, 'English');
+  }
+  if (lang.toLowerCase() === 'hindi' && /[\u0900-\u097F]/.test(message)) {
+    return message;
+  }
 
   const { apiKey, isConfigured } = getOpenAICredentials();
   if (isConfigured && message.trim()) {
@@ -237,7 +245,8 @@ async function processReceptionistTurnRaw(input) {
       return null;
     };
 
-    const n8nRes = await callN8nAiReceptionist({
+    const shouldCallN8n = input.useN8n !== false && input.routeViaN8n !== false;
+    const n8nRes = shouldCallN8n ? await callN8nAiReceptionist({
       channel: input.channel || (input.audioBlob ? 'mic' : 'text'),
       text: transcriptText,
       language: input.language || 'Hinglish',
@@ -245,71 +254,104 @@ async function processReceptionistTurnRaw(input) {
       context: currentContext,
       patientName: currentContext.patientName || input.patientName || 'Patient',
       patientPhone: currentContext.patientPhone || input.patientPhone || '+91 98765 43210',
-    });
+    }) : null;
 
     if (n8nRes && (n8nRes.source === 'n8n' || n8nRes.executedBy === 'remote-n8n')) {
-      const intent = n8nRes.intent || 'BOOK_APPOINTMENT';
+      let actionPayload = n8nRes.actionPayload || n8nRes;
+      const tokenNum = actionPayload?.token?.token_number || actionPayload?.token_number || actionPayload?.booking_result?.token_number;
+      const isExplicitCancel = /\b(cancel|cancellation|radd|रद्द|hatao)\b/i.test(transcriptText);
+      const isExplicitCheck = /\b(show|check|view|status|details)\b/i.test(transcriptText) && /\b(appointment|booking)\b/i.test(transcriptText);
+      const isExplicitDues = /\b(dues|bill|fees|pending|payment)\b/i.test(transcriptText);
 
-      // Strict validation for booking requests
-      if (intent === 'BOOK_APPOINTMENT') {
-        // Hallucinated doctor check
-        let explicitDocCandidate = '';
-        const docMatch = transcriptText.match(/(?:dr\.?|doctor)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
-        if (docMatch) {
-          const nonDoctorWords = ['se', 'ko', 'ka', 'ki', 'dikhao', 'dikhana', 'milna', 'appointment', 'chahiye', 'available', 'checkup', 'visit', 'consultation', 'hain', 'hai', 'kisi', 'kisko', 'pas', 'paas', 'ke'];
-          const firstWord = docMatch[1].trim().split(/\s+/)[0].toLowerCase();
-          if (!nonDoctorWords.includes(firstWord)) {
-            explicitDocCandidate = docMatch[1].trim();
+      // If user is explicitly checking dues or appointments, bypass n8n misclassifications
+      if (isExplicitCheck || isExplicitDues || (n8nRes.intent === 'UNKNOWN' && (isExplicitCheck || isExplicitDues))) {
+        // Fall through to local state machine
+      } else {
+        const intent = isExplicitCancel ? 'CANCEL_APPOINTMENT' : (n8nRes.intent || (tokenNum ? 'BOOK_APPOINTMENT' : null));
+
+        // Strict validation for booking requests
+        if (intent === 'BOOK_APPOINTMENT' || tokenNum) {
+          // Hallucinated doctor check
+          let explicitDocCandidate = '';
+          const docMatch = transcriptText.match(/(?:dr\.?|doctor)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
+          if (docMatch) {
+            const nonDoctorWords = ['se', 'ko', 'ka', 'ki', 'dikhao', 'dikhana', 'milna', 'appointment', 'chahiye', 'available', 'checkup', 'visit', 'consultation', 'hain', 'hai', 'kisi', 'kisko', 'pas', 'paas', 'ke', 'tomorrow', 'today', 'kal', 'aaj'];
+            const parts = docMatch[1].trim().split(/\s+/);
+            const validParts = [];
+            for (const p of parts) {
+              if (nonDoctorWords.includes(p.toLowerCase())) break;
+              validParts.push(p);
+            }
+            if (validParts.length > 0) {
+              explicitDocCandidate = validParts.join(' ');
+            }
           }
-        }
-        if (explicitDocCandidate && !findDocMatch(explicitDocCandidate)) {
-          const docNames = doctors.map(d => d.name).join(', ');
-          return {
-            success: false,
-            status: 'NEEDS_MORE_INFO',
-            intent,
-            transcript: transcriptText,
-            aiMessage: `Maaf kijiye, ${explicitDocCandidate} hamare hospital me registered nahi hain. Hamare pass ye doctors available hain: ${docNames}.`,
-            configurationStatus: configStatus,
-            missingSlots: ['doctor'],
-            suggestedActions: doctors.map(d => ({ label: d.name, text: `${d.name} se appointment chahiye` })),
-            context: currentContext,
-          };
-        }
-
-        // Past date check
-        const dateMatch = transcriptText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
-        if (dateMatch) {
-          const todayStr = new Date().toISOString().split('T')[0];
-          if (dateMatch[1] < todayStr) {
+          if (explicitDocCandidate && !findDocMatch(explicitDocCandidate)) {
+            const docNames = doctors.map(d => d.name).join(', ');
             return {
               success: false,
               status: 'NEEDS_MORE_INFO',
-              intent,
+              intent: 'BOOK_APPOINTMENT',
               transcript: transcriptText,
-              aiMessage: 'Maaf kijiye, yeh date nikal chuki hai. Kripya aaj ya aage ki date batayein.',
+              aiMessage: `Maaf kijiye, ${explicitDocCandidate} hamare hospital me registered nahi hain. Hamare pass ye doctors available hain: ${docNames}.`,
               configurationStatus: configStatus,
-              missingSlots: ['date'],
-              suggestedActions: [{ label: 'Aaj', text: 'Aaj ka appointment chahiye' }, { label: 'Kal', text: 'Kal ka appointment chahiye' }],
+              missingSlots: ['doctor'],
+              suggestedActions: doctors.map(d => ({ label: d.name, text: `${d.name} se appointment chahiye` })),
               context: currentContext,
             };
           }
+
+          // Past date check
+          const dateMatch = transcriptText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+          if (dateMatch) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (dateMatch[1] < todayStr) {
+              return {
+                success: false,
+                status: 'NEEDS_MORE_INFO',
+                intent: 'BOOK_APPOINTMENT',
+                transcript: transcriptText,
+                aiMessage: 'Maaf kijiye, yeh date nikal chuki hai. Kripya aaj ya aage ki date batayein.',
+                configurationStatus: configStatus,
+                missingSlots: ['date'],
+                suggestedActions: [{ label: 'Aaj', text: 'Aaj ka appointment chahiye' }, { label: 'Kal', text: 'Kal ka appointment chahiye' }],
+                context: currentContext,
+              };
+            }
+          }
+
+          // DB slot availability check (prevent fake bookings when doctor has 0 slots on requested date)
+          const reqDate = dateMatch ? dateMatch[1] : (actionPayload?.token?.date || actionPayload?.appointment_date || new Date().toISOString().split('T')[0]);
+          const matchedDoc = findDocMatch(explicitDocCandidate || actionPayload?.token?.doctor || actionPayload?.doctor_name || transcriptText);
+          if (matchedDoc) {
+            const availableSlots = await db.calculateAvailableSlots(matchedDoc.id || matchedDoc.doctor_id, reqDate);
+            if (availableSlots.length === 0) {
+              return {
+                success: false,
+                status: 'NEEDS_MORE_INFO',
+                intent: 'BOOK_APPOINTMENT',
+                transcript: transcriptText,
+                aiMessage: `Maaf kijiye, ${matchedDoc.name} ke pass ${reqDate} ko koi slot available nahi hai. Kripya koi dusri date chunnein ya kisi anya doctor ko select karein.`,
+                configurationStatus: configStatus,
+                missingSlots: ['slot', 'date'],
+                suggestedActions: doctors.map(d => ({ label: d.name, text: `${d.name} se appointment chahiye` })),
+                context: currentContext,
+              };
+            }
+          }
         }
-      }
 
       // If appointment was confirmed via n8n, attach signed QR pass & send Telegram notification
-      let actionPayload = n8nRes.actionPayload || n8nRes;
-      if (actionPayload?.token?.token_number) {
-        const tokenNum = actionPayload.token.token_number;
+      if (tokenNum) {
         const patientName = input.patientName || currentContext.patientName || 'Patient';
         const patientPhone = input.patientPhone || currentContext.patientPhone || '+91 98765 43210';
-        const docName = actionPayload.token.doctor || 'Doctor';
-        const targetDate = actionPayload.token.date || new Date().toISOString().split('T')[0];
-        const timeSlot = actionPayload.token.time || '10:30 AM';
+        const docName = actionPayload?.token?.doctor || actionPayload?.doctor_name || 'Doctor';
+        const targetDate = actionPayload?.token?.date || actionPayload?.appointment_date || new Date().toISOString().split('T')[0];
+        const timeSlot = actionPayload?.token?.time || actionPayload?.appointment_time || '10:30 AM';
 
         // Sign QR code
         const signedQr = generateSignedAppointmentQR({
-          appointment_id: actionPayload.appointment?.id || `apt-${Date.now()}`,
+          appointment_id: actionPayload.appointment?.id || actionPayload.appointment_id || `apt-${Date.now()}`,
           token: tokenNum,
           doctor_name: docName,
           appointment_date: targetDate,
@@ -318,6 +360,13 @@ async function processReceptionistTurnRaw(input) {
 
         actionPayload = {
           ...actionPayload,
+          token: {
+            token_number: tokenNum,
+            doctor: docName,
+            date: targetDate,
+            time: timeSlot,
+            patient: patientName,
+          },
           qr_code: signedQr.qrString,
           signed_qr: signedQr,
         };
@@ -341,6 +390,19 @@ async function processReceptionistTurnRaw(input) {
           // Graceful fallback
         }
 
+        // Trigger n8n Queue Notification Workflow (WF05)
+        triggerN8nQueueNotification({
+          appointment_id: actionPayload.appointment?.id || actionPayload.appointment_id,
+          token_number: tokenNum,
+          patient_name: patientName,
+          phone_number: patientPhone,
+          doctor_name: docName,
+          department: actionPayload.department || 'General Medicine',
+          queue_position: actionPayload.queue_position || 1,
+          estimated_wait_minutes: actionPayload.estimated_wait_minutes || 15,
+          correlation_id: actionPayload.correlation_id,
+        }).catch(() => {});
+
         // Preserved Telegram alert
         sendAppointmentConfirmation({
           patientPhone,
@@ -352,7 +414,6 @@ async function processReceptionistTurnRaw(input) {
         }).catch(() => {});
       }
 
-      // If emergency request from n8n, create real DB mutation
       if (intent === 'EMERGENCY_RESOURCE_REQUEST') {
         try {
           const emReq = await db.createEmergencyRequest({
@@ -362,40 +423,85 @@ async function processReceptionistTurnRaw(input) {
             urgency: 'CRITICAL',
           });
           if (emReq) {
+            const reqObj = emReq.request || emReq;
             actionPayload = {
               ...actionPayload,
-              request: emReq,
+              request: {
+                ...reqObj,
+                id: reqObj.id || reqObj.request_id,
+                request_id: reqObj.request_id || reqObj.id,
+                matches: emReq.matches,
+              },
             };
           }
         } catch (emErr) {}
       }
 
-      // If cancellation from n8n, perform real DB cancellation
+      // If cancellation, perform real DB cancellation and return completed status
       if (intent === 'CANCEL_APPOINTMENT') {
-        try {
-          const tokenMatch = transcriptText.match(/#?MED-\d+/i);
-          if (tokenMatch) {
-            await db.cancelAppointment(tokenMatch[0], hospitalId);
-          }
-        } catch (cErr) {}
+        const tokenMatch = transcriptText.match(/#?MED-\d+/i);
+        const tok = tokenMatch ? tokenMatch[0].toUpperCase() : null;
+        let cancelled = null;
+        if (tok) {
+          try {
+            cancelled = await db.cancelAppointment(tok, hospitalId);
+          } catch (cErr) {}
+        }
+        return {
+          success: true,
+          status: 'ACTION_COMPLETED',
+          intent: 'CANCEL_APPOINTMENT',
+          transcript: transcriptText,
+          aiMessage: `Aapka appointment (${tok || 'specified'}) safaltapoorvak cancel kar diya gaya hai.`,
+          configurationStatus: configStatus,
+          actionPayload: { cancelled: true, token: tok, appointment: cancelled },
+          context: currentContext,
+        };
       }
 
-      const finalMessage = fallbackTranslate(n8nRes.aiMessage || 'Appointment processed via n8n workflow.', input.language);
-      const spoken = fallbackTranslate(n8nRes.spokenText || n8nRes.aiMessage, input.language);
+      if (tokenNum || (n8nRes.success && n8nRes.status !== 'SLOT_UNAVAILABLE' && n8nRes.status !== 'UNPROCESSABLE_ENTITY')) {
+        const finalMessage = fallbackTranslate(n8nRes.aiMessage || 'Appointment processed via n8n workflow.', input.language);
+        const spoken = fallbackTranslate(n8nRes.spokenText || n8nRes.aiMessage, input.language);
 
-      return {
-        success: n8nRes.success ?? true,
-        status: n8nRes.status || 'ACTION_COMPLETED',
-        intent,
-        transcript: transcriptText,
-        aiMessage: finalMessage,
-        spokenText: spoken,
-        configurationStatus: configStatus,
-        validatedSlots: n8nRes.validatedSlots,
-        missingSlots: n8nRes.missingSlots,
-        actionPayload,
-        context: { ...currentContext, ...(n8nRes.context || {}) },
-      };
+        const matchedDoc = findDocMatch(actionPayload?.token?.doctor || actionPayload?.doctor_name || transcriptText) || doctors[0];
+        const matchedDept = departments.find(dept =>
+          dept.id === matchedDoc?.department_id ||
+          transcriptText.toLowerCase().includes(dept.name.toLowerCase())
+        );
+        const resolvedDoctorName = matchedDoc ? matchedDoc.name : (actionPayload?.token?.doctor || 'Dr. Rajesh Sharma');
+        const resolvedDepartmentName = matchedDept ? matchedDept.name : (matchedDoc?.department_name || actionPayload?.department || 'Orthopedics');
+
+        const resolvedValidatedSlots = {
+          doctorName: resolvedDoctorName,
+          departmentName: resolvedDepartmentName,
+          date: actionPayload?.token?.date || new Date().toISOString().split('T')[0],
+          timeSlot: actionPayload?.token?.time || '10:30 AM',
+          patientName: actionPayload?.token?.patient || 'Patient',
+          token: tokenNum,
+          ...(n8nRes.validatedSlots || {}),
+        };
+        if (!resolvedValidatedSlots.doctorName || resolvedValidatedSlots.doctorName === 'Doctor') {
+          resolvedValidatedSlots.doctorName = resolvedDoctorName;
+        }
+        if (!resolvedValidatedSlots.departmentName) {
+          resolvedValidatedSlots.departmentName = resolvedDepartmentName;
+        }
+
+        return {
+          success: n8nRes.success ?? true,
+          status: n8nRes.status || 'ACTION_COMPLETED',
+          intent,
+          transcript: transcriptText,
+          aiMessage: finalMessage,
+          spokenText: spoken,
+          configurationStatus: configStatus,
+          validatedSlots: resolvedValidatedSlots,
+          missingSlots: n8nRes.missingSlots,
+          actionPayload,
+          context: { ...currentContext, ...(n8nRes.context || {}) },
+        };
+      }
+      }
     }
   } catch (err) {
     // Fall back to local pipeline
@@ -537,12 +643,28 @@ async function processReceptionistTurnRaw(input) {
       if (!selectedDoctor && selectedDepartment) {
         const deptDocs = doctors.filter(d => (d.department_id === selectedDepartment.department_id || d.department_id === selectedDepartment.id));
         const docNames = deptDocs.map(d => d.name).join(', ');
+        const userSymptoms = extracted.symptoms || currentContext.symptoms;
+        let responseMsg = '';
+        if (input.language === 'English') {
+          responseMsg = userSymptoms
+            ? `I understand you are experiencing ${userSymptoms}. For these symptoms, our ${selectedDepartment.name} department is recommended, where ${docNames} is available. Which doctor and date would you prefer?`
+            : `Got it. ${selectedDepartment.name} department has these available doctors: ${docNames}. Which doctor and date would you prefer?`;
+        } else if (input.language === 'Hindi') {
+          responseMsg = userSymptoms
+            ? `मैं समझता हूँ कि आपको ${userSymptoms} की समस्या है। इसके लिए हमारा ${selectedDepartment.name} विभाग उपयुक्त है, जहाँ ${docNames} उपलब्ध हैं। आप किस डॉक्टर से किस तारीख को मिलना चाहेंगे?`
+            : `सही है। ${selectedDepartment.name} विभाग में यह डॉक्टर उपलब्ध हैं: ${docNames}। आप किस डॉक्टर से किस तारीख को मिलना चाहेंगे?`;
+        } else {
+          responseMsg = userSymptoms
+            ? `Aapko ${userSymptoms} ki dikkat hai, iske liye hamara ${selectedDepartment.name} department sahi rahega jahan ${docNames} available hain. Aap kin doctor se konsi date ko milna chahenge?`
+            : `Sahi hai. ${selectedDepartment.name} department me ye doctors available hain: ${docNames}. Aap kin doctor se konsi date ko milna chahenge?`;
+        }
+
         return {
           success: true,
           status: 'NEEDS_MORE_INFO',
           intent,
           transcript: transcriptText,
-          aiMessage: `Sahi hai. ${selectedDepartment.name} department me ye doctors available hain: ${docNames}. Aap kin doctor se konsi date ko milna chahenge?`,
+          aiMessage: responseMsg,
           configurationStatus: configStatus,
           missingSlots: ['doctor', 'date'],
           suggestedActions: deptDocs.map(d => ({ label: `👨‍⚕️ ${d.name}`, text: `${d.name} se appointment chahiye aaj` })),
@@ -551,6 +673,7 @@ async function processReceptionistTurnRaw(input) {
             pendingIntent: 'BOOK_APPOINTMENT',
             departmentId: selectedDepartment.department_id || selectedDepartment.id,
             departmentName: selectedDepartment.name,
+            symptoms: userSymptoms,
             patientName,
             patientPhone,
           },
@@ -668,6 +791,21 @@ async function processReceptionistTurnRaw(input) {
           time: selectedSlot,
           token,
         }).catch(() => {});
+
+        // Trigger n8n Workflow (MEDCONNECT | WF05 | QUEUE NOTIFICATION)
+        triggerN8nQueueNotification({
+          appointment_id: bookResult.appointment?.id || bookResult.appointment_id,
+          patient_id: patient.id || patient.patient_id,
+          patient_name: patientName,
+          phone_number: patientPhone,
+          token_number: token,
+          queue_position: 1,
+          estimated_wait_minutes: 10,
+          doctor_name: selectedDoctor.name,
+          room_number: selectedDoctor.room_number || 'Room 101',
+          department: selectedDepartment?.name || 'General Medicine',
+          reminder_stage: 'checked_in',
+        }).catch(err => console.error('[n8n] Failed to trigger queue notification:', err.message));
 
         return {
           success: true,
@@ -931,17 +1069,85 @@ async function processReceptionistTurnRaw(input) {
     }
 
     // -------------------------------------------------------------
-    // INTENT 9: UNKNOWN / DEFAULT
+    // INTENT 9: GREETING
+    // -------------------------------------------------------------
+    case 'GREETING': {
+      const isHindi = input.language === 'Hindi';
+      const isEnglish = input.language === 'English';
+      const msg = isHindi
+        ? 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आज मैं आपकी क्या सहायता कर सकता हूँ? आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं, डॉक्टरों की उपलब्धता जान सकते हैं, या अपनी टोकन कतार स्थिति देख सकते हैं।'
+        : isEnglish
+        ? 'Hello! Welcome to MedConnect AI Receptionist at Yashoda Hospital. How may I assist you today? I can help you book an appointment, check doctor availability, track your queue token, or handle emergency requests.'
+        : 'Namaste! Yashoda Hospital ke MedConnect AI Receptionist me aapka swagat hai. Main aapki appointment booking, doctor availability, queue status check, ya hospital queries me help kar sakta hoon. Aap kaise sahayata chahte hain?';
+
+      return {
+        success: true,
+        status: 'ACTION_COMPLETED',
+        intent: 'GREETING',
+        transcript: transcriptText,
+        aiMessage: msg,
+        configurationStatus: configStatus,
+        suggestedActions: [
+          { label: '🩺 Book Appointment', text: 'I want to book an appointment' },
+          { label: '👨‍⚕️ Available Doctors', text: 'Which doctors are available today?' },
+          { label: '🔢 Check Queue', text: 'Give me my queue/token number' },
+          { label: '💳 Check Dues', text: 'What are my pending dues?' },
+        ],
+      };
+    }
+
+    // -------------------------------------------------------------
+    // INTENT 10: CAPABILITIES_QUERY
+    // -------------------------------------------------------------
+    case 'CAPABILITIES_QUERY': {
+      const isHindi = input.language === 'Hindi';
+      const isEnglish = input.language === 'English';
+      const msg = isHindi
+        ? 'मैं यशोदा हॉस्पिटल का मेडकनेक्ट एआई रिसेप्शनिस्ट हूँ। मैं आपकी इन सेवाओं में सहायता कर सकता हूँ:\n1. 🩺 विशेषज्ञ डॉक्टरों के साथ अपॉइंटमेंट बुक करना (कार्डियोलॉजी, ऑर्थोपेडिक्स, जनरल मेडिसिन, पीडियाट्रिक्स)।\n2. ⏱️ डॉक्टरों की उपलब्धता और समय स्लॉट देखना।\n3. 🔢 अपनी लाइव ओपीडी कतार संख्या और प्रतीक्षा समय जांचना।\n4. 💳 परामर्श शुल्क और बकाया राशि की जानकारी प्राप्त करना।\n5. 🚨 आपातकालीन संसाधन (ऑक्सीजन, आईसीयू बेड, रक्त, एम्बुलेंस) अनुरोध दर्ज करना।\n\nआज मैं आपकी क्या सहायता कर सकता हूँ?'
+        : isEnglish
+        ? 'I am MedConnect\'s AI Receptionist for Yashoda Hospital. Here is how I can assist you:\n1. 🩺 Book appointments with specialist doctors (Cardiology, Orthopedics, General Medicine, Pediatrics).\n2. ⏱️ Check real-time doctor availability and open slots.\n3. 🔢 Track your live OPD queue token position and estimated wait time.\n4. 💳 Check consultation fees and pending dues.\n5. 🚨 Dispatch emergency resource requests (Oxygen, ICU beds, Blood, Ambulances).\n\nHow may I help you today?'
+        : 'Main Yashoda Hospital ka MedConnect AI Receptionist hoon. Main aapki in cheezon me help kar sakta hoon:\n1. 🩺 Specialists ke sath appointment book karna.\n2. ⏱️ Doctor availability aur open time slots check karna.\n3. 🔢 Live OPD queue token aur wait time dekhna.\n4. 💳 Consultation fee aur pending dues check karna.\n5. 🚨 Emergency resources (Oxygen, ICU beds, Blood, Ambulance) request karna.\n\nAapko kis service me help chahiye?';
+
+      return {
+        success: true,
+        status: 'ACTION_COMPLETED',
+        intent: 'CAPABILITIES_QUERY',
+        transcript: transcriptText,
+        aiMessage: msg,
+        configurationStatus: configStatus,
+        suggestedActions: [
+          { label: '🩺 Book Appointment', text: 'I want to book an appointment' },
+          { label: '👨‍⚕️ Doctor Schedules', text: 'Which doctors are available today?' },
+          { label: '🔢 Check Queue Status', text: 'Give me my queue/token number' },
+        ],
+      };
+    }
+
+    // -------------------------------------------------------------
+    // INTENT 11: UNKNOWN / USER-RESPONSIVE FALLBACK
     // -------------------------------------------------------------
     case 'UNKNOWN':
     default: {
+      const isHindi = input.language === 'Hindi';
+      const isEnglish = input.language === 'English';
+      const msg = isHindi
+        ? `आपने कहा: "${transcriptText}"। मैं यशोदा हॉस्पिटल का एआई रिसेप्शनिस्ट हूँ। आप मुझसे डॉक्टर अपॉइंटमेंट बुक करने, डॉक्टरों की उपलब्धता जांचने, कतार स्थिति देखने, या अस्पताल संबंधी प्रश्न पूछने के लिए कह सकते हैं। आज मैं आपकी क्या सहायता करूँ?`
+        : isEnglish
+        ? `You said: "${transcriptText}". I am MedConnect AI Receptionist for Yashoda Hospital. You can ask me to book a doctor appointment, check doctor schedules, track your queue token, or inquire about hospital facilities. How can I assist you with this?`
+        : `Aapne kaha: "${transcriptText}". Main Yashoda Hospital ka AI Receptionist hoon. Aap mujhse doctor appointment book karne, doctor availability check karne, token queue dekhne, ya hospital ki details lene ke liye keh sakte hain. Aap kya karna chahenge?`;
+
       return {
         success: true,
         status: 'ACTION_COMPLETED',
         intent: 'UNKNOWN',
         transcript: transcriptText,
-        aiMessage: 'Namaste! Main MedConnect AI Receptionist hoon. Main aapki appointment booking, queue status check, doctor availability, dues query, ya emergency resource requests me help kar sakta hoon. Aap kaise sahayata chahte hain?',
+        aiMessage: msg,
         configurationStatus: configStatus,
+        suggestedActions: [
+          { label: '🩺 Book Appointment', text: 'I want to book an appointment' },
+          { label: '👨‍⚕️ Available Doctors', text: 'Which doctors are available today?' },
+          { label: '🔢 Check Queue', text: 'Give me my queue/token number' },
+        ],
       };
     }
   }

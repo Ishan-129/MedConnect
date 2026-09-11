@@ -91,14 +91,16 @@ export function normalizeDepartment(dept) {
 export function normalizeDoctor(doc) {
   if (!doc) return null;
   const id = doc.id || doc.doctor_id;
+  const deptName = doc.departments?.name || doc.department_name || doc.specialization || 'General Medicine';
   return {
     ...doc,
     doctor_id: id,
     id,
     hospital_id: doc.hospital_id,
     department_id: doc.department_id,
+    department_name: deptName,
     name: doc.name,
-    specialization: doc.specialization || 'Consultant Specialist',
+    specialization: doc.specialization || deptName || 'Consultant Specialist',
     consultation_fee: Number(doc.consultation_fee) || 500,
     consultation_duration_minutes: doc.consultation_duration_minutes || 15,
     room_number: doc.room_number || 'OPD 101',
@@ -292,6 +294,7 @@ class InMemoryDatabase {
 
     this.doctor_slots = [];
     this.appointments = [];
+    this.queue_entries = [];
     this.emergency_requests = [];
 
     this.generateDefaultSlots();
