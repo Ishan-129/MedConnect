@@ -1,70 +1,58 @@
 {
   "service": "Sarvam AI Speech Services",
-  "module": "Saaras Multilingual Speech-to-Text",
-  "endpoint": "https://api.sarvam.ai/speech-to-text",
-  "model": "saaras:v1",
-  "fallback_model": "saaras:v2",
-  "description": "Production configuration for Sarvam AI Saaras STT used in MedConnect Pulse voice intake pipeline.",
-  "audio_specifications": {
-    "supported_formats": ["audio/webm", "audio/wav", "audio/mp3", "audio/ogg", "audio/flac"],
-    "preferred_format": "audio/webm",
-    "encoding": "base64",
-    "sample_rate_hz": 16000,
-    "min_sample_rate_hz": 8000,
-    "max_sample_rate_hz": 48000,
-    "channels": 1,
-    "channel_layout": "mono",
-    "max_duration_seconds": 60,
-    "chunk_size_ms": 250
-  },
-  "language_configuration": {
-    "default_language_code": "auto",
-    "supported_languages": [
-      {
-        "code": "hi-IN",
-        "name": "Hindi",
-        "native_name": "हिन्दी",
-        "sarvam_code": "hi"
-      },
-      {
-        "code": "en-IN",
-        "name": "English (India)",
-        "native_name": "Indian English",
-        "sarvam_code": "en-IN"
-      },
-      {
-        "code": "ta-IN",
-        "name": "Tamil",
-        "native_name": "தமிழ்",
-        "sarvam_code": "ta"
-      },
-      {
-        "code": "te-IN",
-        "name": "Telugu",
-        "native_name": "తెలుగు",
-        "sarvam_code": "te"
-      }
-    ]
-  },
-  "http_headers": {
-    "Content-Type": "application/json",
-    "api-subscription-key": "ENV:SARVAM_API_KEY",
-    "Authorization": "Bearer ENV:SARVAM_API_KEY"
-  },
-  "request_payload_template": {
+  "stt": {
+    "module": "Saaras / Saarika Multilingual Speech-to-Text",
+    "endpoint": "https://api.sarvam.ai/speech-to-text",
     "model": "saaras:v1",
-    "audio": "{{base64_audio_payload}}",
-    "language_code": "{{language_code_or_auto}}",
-    "with_timestamps": false
-  },
-  "resilience_policy": {
-    "request_timeout_ms": 10000,
-    "max_retries": 3,
-    "retry_backoff_ms": 1500,
-    "retryable_status_codes": [429, 500, 502, 503, 504],
-    "fallback_behavior": {
-      "on_failure": "SWITCH_TO_TEXT_INPUT",
-      "notification_message": "Voice intake temporarily unavailable. Please use text typing."
+    "alternative_model": "saarika:v2.5",
+    "description": "Production configuration for Sarvam AI Saaras/Saarika STT used in MedConnect Pulse voice intake pipeline.",
+    "audio_specifications": {
+      "supported_formats": ["audio/webm", "audio/wav", "audio/mp3", "audio/ogg", "audio/flac"],
+      "preferred_format": "audio/webm",
+      "encoding": "multipart/form-data or base64",
+      "sample_rate_hz": 16000,
+      "min_sample_rate_hz": 8000,
+      "max_sample_rate_hz": 48000,
+      "channels": 1,
+      "channel_layout": "mono",
+      "max_duration_seconds": 60,
+      "chunk_size_ms": 250
+    },
+    "domain_prompt_biasing": "Dr. Rajesh Sharma, Dr. Priya Ananth, Dr. Amit Patel, Dr. Vikram Malhotra, Dr. Sunita Rao, Dr. Ananya Roy, Cardiology, Orthopedics, Neurology, General Medicine, Pediatrics, Dermatology, OPD, appointment, token MED-101, token MED-102, ICU bed, ventilator, emergency",
+    "language_configuration": {
+      "default_language_code": "hi-IN",
+      "supported_languages": [
+        { "name": "Hindi", "code": "hi-IN" },
+        { "name": "English", "code": "en-IN" },
+        { "name": "Tamil", "code": "ta-IN" },
+        { "name": "Telugu", "code": "te-IN" },
+        { "name": "Bengali", "code": "bn-IN" },
+        { "name": "Marathi", "code": "mr-IN" },
+        { "name": "Gujarati", "code": "gu-IN" },
+        { "name": "Kannada", "code": "kn-IN" },
+        { "name": "Punjabi", "code": "pa-IN" },
+        { "name": "Odia", "code": "or-IN" }
+      ]
+    },
+    "http_headers": {
+      "api-subscription-key": "ENV:SARVAM_API_KEY"
+    },
+    "resilience_policy": {
+      "request_timeout_ms": 10000,
+      "max_retries": 3,
+      "retry_backoff_ms": 1500,
+      "retryable_status_codes": [429, 500, 502, 503, 504],
+      "fallback_behavior": {
+        "on_failure": "SWITCH_TO_TEXT_INPUT",
+        "notification_message": "Voice intake temporarily unavailable. Please use text typing."
+      }
     }
+  },
+  "tts": {
+    "module": "Bulbul Multilingual Text-to-Speech",
+    "endpoint": "https://api.sarvam.ai/text-to-speech",
+    "model": "bulbul:v3",
+    "supported_speakers": ["priya", "aditya", "neha", "rahul", "pooja", "rohan", "anand", "kavitha"],
+    "default_speaker": "priya"
   }
 }
