@@ -161,7 +161,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/receptionist/welcome' && req.method === 'GET') {
-      const lang = reqUrl.searchParams.get('lang') || 'Hinglish';
+      const lang = reqUrl.searchParams.get('lang') || 'English';
       return sendJson(res, 200, { welcomeMessage: getWelcomeMessage(lang) });
     }
 
@@ -171,7 +171,7 @@ const server = http.createServer(async (req, res) => {
         channel: body.channel || 'text',
         text: body.text,
         audioBlob: body.audioBlob,
-        language: body.language || 'Hinglish',
+        language: body.language || 'English',
         hospitalId: body.hospitalId,
         patientName: body.patientName,
         patientPhone: body.patientPhone,
@@ -389,12 +389,14 @@ const server = http.createServer(async (req, res) => {
       let phone = reqUrl.searchParams.get('phone') || reqUrl.searchParams.get('patientPhone');
       const status = reqUrl.searchParams.get('status');
 
+      const userRole = auth.user?.role?.toLowerCase();
+
       // Patient Isolation: If request is authenticated as a patient, STRICTLY scope to their identity
-      if (auth.valid && auth.user?.role === 'patient') {
-        patientId = auth.user.id;
+      if (auth.valid && userRole === 'patient') {
+        patientId = auth.user.patient_id || auth.user.id;
         phone = auth.user.phone || phone;
-      } else if (auth.valid && auth.user?.role === 'hospital') {
-        hospitalId = hospitalId || auth.user.id;
+      } else if (auth.valid && (userRole === 'hospital' || userRole === 'receptionist')) {
+        hospitalId = hospitalId || auth.user.hospital_id || auth.user.id;
       } else if (!auth.valid && !patientId && !phone && !hospitalId && !doctorId) {
         // Prevent unauthenticated full data dump of all patient appointments
         return sendJson(res, 200, { success: true, count: 0, appointments: [] });
@@ -408,7 +410,26 @@ const server = http.createServer(async (req, res) => {
         status,
       });
 
-      return sendJson(res, 200, { success: true, count: appointments.length, appointments });
+      // Defense-in-depth: if filtered by patient or authenticated as patient, guarantee only their records are returned
+      let finalAppointments = appointments;
+      if (patientId || phone) {
+        const cleanReqPhone = phone ? phone.replace(/\D/g, '') : null;
+        finalAppointments = appointments.filter(a => {
+          const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+          if (patientId && aPatId && (aPatId === patientId || aPatId === auth.user?.id || aPatId === auth.user?.patient_id)) {
+            return true;
+          }
+          if (cleanReqPhone) {
+            const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+            if (aPhone && (aPhone === cleanReqPhone || (cleanReqPhone.length >= 10 && aPhone.endsWith(cleanReqPhone.slice(-10))) || (aPhone.length >= 10 && cleanReqPhone.endsWith(aPhone.slice(-10))))) {
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+
+      return sendJson(res, 200, { success: true, count: finalAppointments.length, appointments: finalAppointments });
     }
 
     if (pathname === '/api/appointments/check' && req.method === 'GET') {

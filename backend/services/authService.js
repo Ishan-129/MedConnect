@@ -333,7 +333,7 @@ export async function verifySession(token) {
     }
 
     const authUser = data.user;
-    const role = authUser.user_metadata?.role || 'patient';
+    const role = (authUser.user_metadata?.role || 'patient').toLowerCase();
 
     // Retrieve database profile
     let profile = null;
@@ -345,13 +345,17 @@ export async function verifySession(token) {
       profile = p;
     }
 
+    const patientId = profile?.id || profile?.patient_id || authUser.id;
+    const resolvedPhone = authUser.user_metadata?.phone || authUser.user_metadata?.phone_number || profile?.phone_number || profile?.contact_phone || profile?.phone || '';
+
     const user = {
       id: authUser.id,
       user_id: authUser.id,
+      patient_id: patientId,
       email: authUser.email,
       role,
       name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || profile?.name || profile?.full_name || authUser.email.split('@')[0],
-      phone: authUser.user_metadata?.phone || authUser.user_metadata?.phone_number || profile?.contact_phone || profile?.phone_number || '',
+      phone: resolvedPhone,
       profile,
     };
 

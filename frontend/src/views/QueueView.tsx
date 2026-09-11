@@ -123,6 +123,15 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
     };
   }, [fetchQueue, trackedToken, fetchTokenStatus]);
 
+  // Auto-switch role view based on authenticated user type
+  useEffect(() => {
+    if (activePatient && !activeHospital) {
+      setRoleView('patient');
+    } else if (activeHospital) {
+      setRoleView('reception');
+    }
+  }, [activePatient, activeHospital]);
+
   // Phase 7: Automatically resolve patient active appointment from real database upon login/mount
   useEffect(() => {
     if (activePatient?.patient_id || activePatient?.phone) {
@@ -136,14 +145,38 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
         .then(res => res.json())
         .then(data => {
           if (data.appointments && data.appointments.length > 0) {
-            // Find active appointment or latest
-            const activeAppt = data.appointments.find((a: any) =>
-              ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'booked', 'checked_in', 'in_consultation'].includes(a.status)
-            ) || data.appointments[0];
-            const tok = activeAppt.token_number || activeAppt.token;
-            if (tok && tok !== trackedToken) {
-              setTrackedToken(tok);
-              fetchTokenStatus(tok);
+            // Strict client-side isolation to logged-in patient
+            const cleanUserPhone = (activePatient.phone || '').replace(/\D/g, '');
+            const myAppts = data.appointments.filter((a: any) => {
+              const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+              if (activePatient.patient_id && aPatId && aPatId === activePatient.patient_id) return true;
+              const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+              if (cleanUserPhone && aPhone) {
+                if (cleanUserPhone === aPhone) return true;
+                if (cleanUserPhone.length >= 10 && aPhone.endsWith(cleanUserPhone.slice(-10))) return true;
+                if (aPhone.length >= 10 && cleanUserPhone.endsWith(aPhone.slice(-10))) return true;
+              }
+              if (activePatient.name && (a.patient_name || a.patients?.full_name)) {
+                const name1 = activePatient.name.trim().toLowerCase();
+                const name2 = (a.patient_name || a.patients?.full_name || '').trim().toLowerCase();
+                if (name1 && name2 && name1 === name2) return true;
+              }
+              return false;
+            });
+
+            if (myAppts.length > 0) {
+              // Find active appointment or latest
+              const activeAppt = myAppts.find((a: any) =>
+                ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'booked', 'checked_in', 'in_consultation'].includes(a.status)
+              ) || myAppts[0];
+              const tok = activeAppt.token_number || activeAppt.token;
+              if (tok && tok !== trackedToken) {
+                setTrackedToken(tok);
+                fetchTokenStatus(tok);
+              }
+            } else {
+              setTrackedToken('');
+              setTrackedStatusData(null);
             }
           } else {
             // Patient has no appointments: clear any previous user's token
@@ -156,7 +189,7 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
       setTrackedToken('');
       setTrackedStatusData(null);
     }
-  }, [activePatient?.patient_id, activePatient?.phone, fetchTokenStatus, getAuthHeader]);
+  }, [activePatient?.patient_id, activePatient?.phone, activePatient?.name, fetchTokenStatus, getAuthHeader]);
 
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);

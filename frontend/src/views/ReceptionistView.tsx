@@ -57,7 +57,7 @@ export const ReceptionistView: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('hi-IN');
+  const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('en-IN');
   const [transcript, setTranscript] = useState('');
   const [patientName, setPatientName] = useState<string>(
     () => activePatient?.name || ''
@@ -85,7 +85,7 @@ export const ReceptionistView: React.FC = () => {
     }
   }, [activePatient]);
   const [aiSpeechMessage, setAiSpeechMessage] = useState<string>(
-    'नमस्ते! मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।'
+    'Hello! Welcome to MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.'
   );
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContext>({});
@@ -420,7 +420,25 @@ export const ReceptionistView: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         const rawList = data.appointments || [];
-        formatted = rawList.map((a: any) => ({
+        const cleanUserPhone = (targetPhone || '').replace(/\D/g, '');
+        const patientOnlyList = rawList.filter((a: any) => {
+          const aPatId = a.patient_id || a.patients?.id || a.patients?.patient_id;
+          if (targetPatientId && aPatId && aPatId === targetPatientId) return true;
+          const aPhone = (a.patient_phone || a.phone || a.patients?.phone_number || a.patients?.phone || '').replace(/\D/g, '');
+          if (cleanUserPhone && aPhone) {
+            if (cleanUserPhone === aPhone) return true;
+            if (cleanUserPhone.length >= 10 && aPhone.endsWith(cleanUserPhone.slice(-10))) return true;
+            if (aPhone.length >= 10 && cleanUserPhone.endsWith(aPhone.slice(-10))) return true;
+          }
+          if (activePatient.name && (a.patient_name || a.patients?.full_name)) {
+            const cleanActiveName = activePatient.name.trim().toLowerCase();
+            const cleanApptName = (a.patient_name || a.patients?.full_name || '').trim().toLowerCase();
+            if (cleanActiveName && cleanApptName && cleanActiveName === cleanApptName) return true;
+          }
+          return false;
+        });
+
+        formatted = patientOnlyList.map((a: any) => ({
           id: a.appointment_id || a.id,
           token_number: a.token_number,
           status: a.status || 'CONFIRMED',
@@ -472,11 +490,11 @@ export const ReceptionistView: React.FC = () => {
   // Map language to display label for speech synthesis and STT
   const getLanguageLabel = useCallback((code: string): string => {
     switch (code) {
-      case 'hi-IN': return 'Hindi';
       case 'en-IN': return 'English';
+      case 'hi-IN': return 'Hindi';
       case 'ta-IN': return 'Tamil';
       case 'te-IN': return 'Telugu';
-      default: return 'Hindi';
+      default: return 'English';
     }
   }, []);
 
@@ -1105,19 +1123,19 @@ export const ReceptionistView: React.FC = () => {
                 setSelectedLanguage(nextLang);
                 if (isSpeaking) handleStopSpeaking();
                 const greetings: Record<string, string> = {
-                  'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
                   'en-IN': 'Hello! Welcome to Yashoda Hospital MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.',
+                  'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
                   'ta-IN': 'வணக்கம்! மெட்கனெக்ட் ஏஐ வரவேற்பாளருக்கு வரவேற்கிறோம். மருத்துவர் சந்திப்பை பதிவு செய்ய பேசவும் அல்லது தட்டச்சு செய்யவும்.',
                   'te-IN': 'నమస్కారం! మెడ్‌కనెక్ట్ ఏఐ రిసెప్షనిస్ట్‌కు స్వాగతం. డాక్టర్ అపాయింట్‌మెంట్ బుక్ చేయడానికి మాట్లాడండి లేదా టైప్ చేయండి.',
                 };
                 if (Object.values(greetings).includes(aiSpeechMessage) || !aiSpeechMessage) {
-                  setAiSpeechMessage(greetings[nextLang] || greetings['hi-IN']);
+                  setAiSpeechMessage(greetings[nextLang] || greetings['en-IN']);
                 }
               }}
               className="pulse-select text-xs font-mono font-semibold py-1 px-2 text-accent border-rule bg-paper-2"
             >
-              <option value="hi-IN">Hindi (hi-IN)</option>
               <option value="en-IN">English (en-IN)</option>
+              <option value="hi-IN">Hindi (hi-IN)</option>
               <option value="ta-IN">Tamil (ta-IN)</option>
               <option value="te-IN">Telugu (te-IN)</option>
             </select>
