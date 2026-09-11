@@ -15,8 +15,33 @@ import { AuthGate } from './components/AuthGate';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 function MainAppContent() {
-  const [activePortal, setActivePortal] = useState<PortalType>('landing');
-  const [patientTab, setPatientTab] = useState<'receptionist' | 'queue'>('receptionist');
+  const [hasCheckInLink, setHasCheckInLink] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      return p.get('checkin') === 'true' || p.has('token') || window.location.pathname.startsWith('/checkin');
+    }
+    return false;
+  });
+
+  const [activePortal, setActivePortal] = useState<PortalType>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('checkin') === 'true' || p.has('token') || window.location.pathname.startsWith('/checkin')) {
+        return 'patient';
+      }
+    }
+    return 'landing';
+  });
+
+  const [patientTab, setPatientTab] = useState<'receptionist' | 'queue'>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('checkin') === 'true' || p.has('token') || window.location.pathname.startsWith('/checkin')) {
+        return 'queue';
+      }
+    }
+    return 'receptionist';
+  });
   const [hospitalTab, setHospitalTab] = useState<'emergency' | 'queue'>('emergency');
 
   const handleSelectPortal = (portal: 'patient' | 'hospital', subView?: 'receptionist' | 'queue' | 'emergency') => {
@@ -66,9 +91,13 @@ function MainAppContent() {
                 <>
                   {patientTab === 'receptionist' && <ReceptionistView />}
                   {patientTab === 'queue' && (
-                    <AuthGate role="patient" title="Patient Queue & Token Tracker">
+                    hasCheckInLink ? (
                       <QueueView defaultRole="patient" hideRoleSwitcher={true} />
-                    </AuthGate>
+                    ) : (
+                      <AuthGate role="patient" title="Patient Queue & Token Tracker">
+                        <QueueView defaultRole="patient" hideRoleSwitcher={true} />
+                      </AuthGate>
+                    )
                   )}
                 </>
               )}

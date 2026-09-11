@@ -1075,11 +1075,11 @@ export const EmergencyView: React.FC = () => {
               Regional Healthcare Network Telemetry & 15km Proximity Grid
             </h3>
             <p className="pulse-text-muted text-xs">
-              Live capacity, blood bank reserves, and Haversine distance from AIIMS Trauma Center.
+              Live capacity, blood bank reserves, and Haversine distance from {activeHospital?.name || 'Primary Facility'}.
             </p>
           </div>
           <span className="pulse-badge pulse-badge-green text-xs font-semibold">
-            <span className="pulse-dot pulse-dot-green"></span> 5 Hospital Nodes Synced
+            <span className="pulse-dot pulse-dot-green"></span> {hospitals.length} Hospital Nodes Synced
           </span>
         </div>
 

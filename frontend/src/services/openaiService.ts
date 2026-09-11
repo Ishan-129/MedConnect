@@ -90,7 +90,11 @@ export async function extractIntentAndSlots(transcriptionText: string): Promise<
   }
 
   let doctorName: string | undefined;
-  if (lower.includes('sharma') || lower.includes('rajesh') || lower.includes('राजेश')) doctorName = 'Dr. Rajesh Sharma';
+  const docMatch = text.match(/(?:dr\.?|doctor)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i);
+  if (docMatch) {
+    const rawName = docMatch[1].trim();
+    doctorName = `Dr. ${rawName.charAt(0).toUpperCase() + rawName.slice(1)}`;
+  } else if (lower.includes('sharma') || lower.includes('rajesh') || lower.includes('राजेश')) doctorName = 'Dr. Rajesh Sharma';
   else if (lower.includes('roy') || lower.includes('ananya') || lower.includes('अनन्या')) doctorName = 'Dr. Ananya Roy';
   else if (lower.includes('priya') || lower.includes('प्रिया')) doctorName = 'Dr. Priya Nair';
   else if (lower.includes('vikramaditya') || lower.includes('विक्रमादित्य')) doctorName = 'Dr. Vikramaditya Rao';

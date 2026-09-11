@@ -871,11 +871,14 @@ class InMemoryDatabase {
     };
   }
 
-  verifyAndCheckInAppointment({ tokenId, appointmentId, action = 'verify', user = null }) {
-    const normalizedToken = tokenId ? (tokenId.startsWith('#') ? tokenId : `#${tokenId}`) : null;
+  verifyAndCheckInAppointment({ tokenId, appointmentId, action = 'verify', user = null, isQrVerified = false }) {
+    const rawToken = typeof tokenId === 'object' && tokenId !== null ? (tokenId.token_number || tokenId.token) : tokenId;
+    const stringToken = typeof rawToken === 'string' ? rawToken : (rawToken ? String(rawToken) : null);
+    const normalizedToken = stringToken ? (stringToken.startsWith('#') ? stringToken : `#${stringToken}`) : null;
+    const cleanApptId = typeof appointmentId === 'object' && appointmentId !== null ? (appointmentId.appointment_id || appointmentId.id) : appointmentId;
     const appt = this.appointments.find(a =>
-      (appointmentId && (a.appointment_id === appointmentId || a.id === appointmentId)) ||
-      (normalizedToken && (a.token === normalizedToken || a.token_number === normalizedToken || a.token === tokenId || a.token_number === tokenId))
+      (cleanApptId && (a.appointment_id === cleanApptId || a.id === cleanApptId)) ||
+      (normalizedToken && (a.token === normalizedToken || a.token_number === normalizedToken || a.token === stringToken || a.token_number === stringToken))
     );
 
     if (!appt) {
@@ -898,23 +901,33 @@ class InMemoryDatabase {
     const patName = patient?.name || appt.patient_name || 'Patient';
     const patPhone = patient?.phone || appt.patient_phone || '';
 
+    // Check-in security policy: User must be logged in OR scanning an authentic appointment QR pass
+    if (action === 'check_in' && !user && !isQrVerified) {
+      return {
+        success: false,
+        status: 'FORBIDDEN',
+        code: 'LOGIN_REQUIRED',
+        message: 'You must be logged into your account or scan an official appointment QR pass to check in.',
+      };
+    }
+
     // Check authorization: if authenticated as a patient, must own the appointment
     if (user && user.role === 'patient') {
       const isOwner = (user.id && (user.id === appt.patient_id || user.id === patient?.id || user.id === patient?.patient_id)) ||
-                      (user.phone && (user.phone === patPhone || (patPhone && patPhone.endsWith(user.phone.slice(-10)))));
+                      (user.phone && (user.phone === patPhone || (patPhone && (patPhone.endsWith(user.phone.slice(-10)) || user.phone.endsWith(patPhone.slice(-10))))));
       if (!isOwner) {
         return {
           success: false,
           status: 'FORBIDDEN',
           code: 'UNAUTHORIZED_ACCESS',
-          message: 'Access denied: You are not authorized to view or verify another patient’s appointment pass.',
+          message: 'Access denied: You are not authorized to check in or view another patient’s appointment pass.',
         };
       }
     }
 
     // Role-based information masking
     const isStaff = user && ['hospital', 'receptionist', 'doctor', 'admin'].includes(user.role?.toLowerCase());
-    const isOwner = user && ((user.id && (user.id === appt.patient_id || user.id === patient?.id)) || (user.phone && user.phone === patPhone));
+    const isOwner = isQrVerified || (user && ((user.id && (user.id === appt.patient_id || user.id === patient?.id)) || (user.phone && user.phone === patPhone)));
     const permittedPatientName = (isStaff || isOwner) ? patName : `${patName.slice(0, 1)}***`;
     const permittedPatientPhone = (isStaff || isOwner) ? patPhone : (patPhone ? `+91 ******${patPhone.slice(-4)}` : '');
 
@@ -1717,13 +1730,18 @@ export const db = {
   },
 
   async getPatientQueueMetrics(tokenIdOrApptId) {
+    if (!tokenIdOrApptId) return null;
+    const rawVal = typeof tokenIdOrApptId === 'object' ? (tokenIdOrApptId.token_number || tokenIdOrApptId.token || tokenIdOrApptId.id) : tokenIdOrApptId;
+    const searchVal = typeof rawVal === 'string' ? rawVal : String(rawVal || '');
+    if (!searchVal) return null;
+
     if (supabase) {
       try {
         let query = supabase.from('appointments').select('*, doctors(name), departments(name)');
-        if (tokenIdOrApptId.startsWith('#') || tokenIdOrApptId.startsWith('MED-')) {
-          query = query.eq('token_number', tokenIdOrApptId);
+        if (searchVal.startsWith('#') || searchVal.startsWith('MED-')) {
+          query = query.eq('token_number', searchVal);
         } else {
-          query = query.or(`id.eq.${tokenIdOrApptId},token_number.eq.${tokenIdOrApptId}`);
+          query = query.or(`id.eq.${searchVal},token_number.eq.${searchVal}`);
         }
         const { data: appt } = await query.maybeSingle();
         if (appt) {
@@ -1994,8 +2012,11 @@ export const db = {
   },
 
   async verifyAndCheckInAppointment({ qrData, tokenId, appointmentId, action = 'verify', user = null }) {
-    let resolvedToken = tokenId;
-    let resolvedAppointmentId = appointmentId;
+    const rawTok = typeof tokenId === 'object' && tokenId !== null ? (tokenId.token_number || tokenId.token) : tokenId;
+    let resolvedToken = typeof rawTok === 'string' ? rawTok : (rawTok ? String(rawTok) : null);
+    const rawApptId = typeof appointmentId === 'object' && appointmentId !== null ? (appointmentId.appointment_id || appointmentId.id) : appointmentId;
+    let resolvedAppointmentId = typeof rawApptId === 'string' ? rawApptId : (rawApptId ? String(rawApptId) : null);
+    let isCryptographicallyVerified = false;
 
     // 1. If qrData is provided, cryptographically verify payload first
     if (qrData) {
@@ -2012,21 +2033,25 @@ export const db = {
             : 'Cryptographic QR verification failed: Pass is forged, corrupted, or tampered.',
         };
       } else {
-        // Valid cryptographic signature
-        resolvedToken = qrCheck.data.token;
-        resolvedAppointmentId = qrCheck.data.id;
+        // Valid cryptographic signature or verified URL pass
+        resolvedToken = typeof qrCheck.data.token === 'object' && qrCheck.data.token !== null ? (qrCheck.data.token.token_number || qrCheck.data.token.token) : qrCheck.data.token;
+        resolvedAppointmentId = typeof qrCheck.data.id === 'object' && qrCheck.data.id !== null ? (qrCheck.data.id.appointment_id || qrCheck.data.id.id) : qrCheck.data.id;
+        isCryptographicallyVerified = true;
       }
     }
+
+    const stringToken = typeof resolvedToken === 'string' ? resolvedToken : (resolvedToken ? String(resolvedToken) : null);
+    const stringApptId = typeof resolvedAppointmentId === 'string' ? resolvedAppointmentId : (resolvedAppointmentId ? String(resolvedAppointmentId) : null);
 
     // 2. Validate against live database
     if (supabase) {
       try {
         let query = supabase.from('appointments').select('*, doctors(name, hospital_id, departments(name)), departments(name), hospitals(name), patients(full_name, phone_number), slots(slot_date, start_time)');
-        if (resolvedAppointmentId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(resolvedAppointmentId)) {
-          query = query.eq('id', resolvedAppointmentId);
-        } else if (resolvedToken) {
-          const cleanTok = resolvedToken.replace('#', '');
-          query = query.or(`token_number.eq.${resolvedToken},token_number.eq.#${cleanTok},token_number.eq.${cleanTok}`);
+        if (stringApptId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stringApptId)) {
+          query = query.eq('id', stringApptId);
+        } else if (stringToken) {
+          const cleanTok = stringToken.replace('#', '');
+          query = query.or(`token_number.eq.${stringToken},token_number.eq.#${cleanTok},token_number.eq.${cleanTok}`);
         }
         const { data: appt, error: apptErr } = await query.maybeSingle();
         if (!apptErr && appt) {
@@ -2037,6 +2062,16 @@ export const db = {
           const patName = appt.patients?.full_name || appt.patients?.name || 'Patient';
           const patPhone = appt.patients?.phone_number || appt.patients?.phone || '';
 
+          // Check-in security policy: User must be logged in OR presenting an authentic appointment QR pass
+          if (action === 'check_in' && !user && !isCryptographicallyVerified) {
+            return {
+              success: false,
+              status: 'FORBIDDEN',
+              code: 'LOGIN_REQUIRED',
+              message: 'You must be logged into your account or scan an official appointment QR pass to check in.',
+            };
+          }
+
           // Check authorization: if authenticated as a patient, must own the appointment
           if (user && user.role === 'patient') {
             const isOwner = (user.id && (user.id === appt.patient_id || user.id === appt.patients?.id)) ||
@@ -2046,13 +2081,13 @@ export const db = {
                 success: false,
                 status: 'FORBIDDEN',
                 code: 'UNAUTHORIZED_ACCESS',
-                message: 'Access denied: You are not authorized to view or verify another patient’s appointment pass.',
+                message: 'Access denied: You are not authorized to check in or view another patient’s appointment pass.',
               };
             }
           }
 
           const isStaff = user && ['hospital', 'receptionist', 'doctor', 'admin'].includes(user.role?.toLowerCase());
-          const isOwner = user && ((user.id && (user.id === appt.patient_id || user.id === appt.patients?.id)) || (user.phone && (user.phone === patPhone || (patPhone && (patPhone.endsWith(user.phone.slice(-10)) || user.phone.endsWith(patPhone.slice(-10)))))));
+          const isOwner = isCryptographicallyVerified || (user && ((user.id && (user.id === appt.patient_id || user.id === appt.patients?.id)) || (user.phone && (user.phone === patPhone || (patPhone && (patPhone.endsWith(user.phone.slice(-10)) || user.phone.endsWith(patPhone.slice(-10))))))));
           const permittedPatientName = (isStaff || isOwner) ? patName : `${patName.slice(0, 1)}***`;
           const permittedPatientPhone = (isStaff || isOwner) ? patPhone : (patPhone ? `+91 ******${patPhone.slice(-4)}` : '');
 
@@ -2187,10 +2222,11 @@ export const db = {
     }
 
     return inMemoryDb.verifyAndCheckInAppointment({
-      tokenId: resolvedToken,
-      appointmentId: resolvedAppointmentId,
+      tokenId: stringToken,
+      appointmentId: stringApptId,
       action,
       user,
+      isQrVerified: isCryptographicallyVerified,
     });
   },
 

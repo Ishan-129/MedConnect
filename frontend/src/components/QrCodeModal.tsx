@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, QrCode, ShieldCheck, Clock } from 'lucide-react';
+import { X, QrCode, ShieldCheck, Clock, ExternalLink, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { motionTokens, springs } from '../lib/motionTokens';
 
@@ -29,6 +29,42 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
   data,
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [networkBaseUrl, setNetworkBaseUrl] = useState<string>(() => {
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return window.location.origin;
+    }
+    return 'http://172.16.4.90:5173';
+  });
+
+  // Fetch host LAN IP from backend so mobile phone connected to same Wi-Fi can open the check-in URL
+  useEffect(() => {
+    fetch('/api/network-info')
+      .then((res) => res.json())
+      .then((info) => {
+        if (info.baseUrl) {
+          setNetworkBaseUrl(info.baseUrl);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Construct direct clickable check-in URL for mobile camera scanning
+  const rawTokenStr = typeof data.token === 'string' ? data.token : ((data.token as any)?.token_number || String(data.id || ''));
+  const cleanToken = rawTokenStr ? (rawTokenStr.startsWith('#') ? rawTokenStr : `#${rawTokenStr}`) : '#MED-PASS';
+  const cleanId = String(data.id || '');
+  const cleanSig = typeof data.signature === 'string' ? data.signature : String(data.signature || '');
+
+  const checkInUrl = type === 'appointment'
+    ? `${networkBaseUrl}/?checkin=true&token=${encodeURIComponent(cleanToken)}&id=${encodeURIComponent(cleanId)}${cleanSig ? `&sig=${encodeURIComponent(cleanSig)}` : ''}`
+    : (data.qrPayload || JSON.stringify({
+        type: 'emergency_dispatch',
+        id: cleanId,
+        token: cleanToken,
+        iat: data.issuedAt,
+        exp: data.expiresAt,
+        sig: cleanSig,
+      }));
 
   // Focus trap
   useEffect(() => {
@@ -118,7 +154,7 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
                   <h3 className="pulse-h4 text-base">{title}</h3>
                   <p className="pulse-text-muted text-xs">
                     {type === 'appointment'
-                      ? 'Present token at reception desk for instant check-in'
+                      ? 'Scan with phone camera or tap link for instant check-in'
                       : 'Official Tamper-Proof Handover Pass'}
                   </p>
                 </div>
@@ -137,34 +173,66 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
             {/* Modal Body */}
             <div className="pulse-modal-body space-y-4">
               {/* Real Cryptographic QR Representation */}
-              <div className="bg-white p-5 rounded-xl border border-rule flex flex-col items-center justify-center shadow-hairline mx-auto max-w-[240px]">
+              <div className="bg-white p-5 rounded-xl border border-rule flex flex-col items-center justify-center shadow-hairline mx-auto max-w-[280px]">
                 <div className="p-3 bg-white rounded-lg border border-slate-200 shadow-sm flex items-center justify-center">
                   <QRCodeSVG
-                    value={
-                      data.qrPayload ||
-                      JSON.stringify({
-                        type: type === 'appointment' ? 'appointment_checkin' : 'emergency_dispatch',
-                        id: String(data.id || ''),
-                        token: typeof data.token === 'string' ? data.token : ((data.token as any)?.token_number || String(data.id || '')),
-                        iat: data.issuedAt,
-                        exp: data.expiresAt,
-                        sig: typeof data.signature === 'string' ? data.signature : String(data.signature || ''),
-                      })
-                    }
-                    size={168}
-                    level="H"
+                    value={checkInUrl}
+                    size={176}
+                    level="M"
                     includeMargin={false}
                   />
                 </div>
 
                 <div className="mt-2.5 text-center">
                   <span className="text-[11px] font-mono font-bold text-slate-900 tabular-nums">
-                    {typeof data.token === 'string' ? data.token : ((data.token as any)?.token_number || String(data.id || ''))}
+                    {cleanToken}
                   </span>
                   <p className="text-[10px] font-mono text-emerald-600 font-bold tracking-wider uppercase mt-0.5">
-                    Verified Cryptographic Pass
+                    {type === 'appointment' ? 'Direct Mobile Check-In QR' : 'Verified Cryptographic Pass'}
                   </p>
                 </div>
+
+                {type === 'appointment' && (
+                  <div className="mt-3 w-full space-y-2">
+                    <div className="p-2 rounded-lg bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-1">
+                      <span className="text-[10px] font-mono text-slate-600 font-bold uppercase tracking-wider flex items-center space-x-1">
+                        <ExternalLink className="w-3 h-3 text-accent" />
+                        <span>Instant Check-In Link</span>
+                      </span>
+                      <a
+                        href={checkInUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] font-mono text-accent hover:underline break-all line-clamp-1"
+                        title={checkInUrl}
+                      >
+                        {checkInUrl}
+                      </a>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 w-full">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(checkInUrl);
+                          setCopiedLink(true);
+                          setTimeout(() => setCopiedLink(false), 2000);
+                        }}
+                        className="pulse-btn pulse-btn-secondary text-[10px] py-1.5 px-2.5 flex-1 flex items-center justify-center space-x-1 font-mono"
+                      >
+                        {copiedLink ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-ink-muted" />}
+                        <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
+                      </button>
+
+                      <a
+                        href={checkInUrl}
+                        className="pulse-btn pulse-btn-primary text-[10px] py-1.5 px-3 flex items-center justify-center space-x-1 font-mono shrink-0"
+                      >
+                        <span>Open Now →</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Clinical Telemetry & Metadata Strip */}

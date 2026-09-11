@@ -380,11 +380,11 @@ export const TransportationMap: React.FC<TransportationMapProps> = ({
           <div className="font-bold text-ink border-b border-rule-subtle pb-1">Geospatial Legend</div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
-            <span>Requester Hospital (AIIMS)</span>
+            <span>Requester ({requesterHospital?.name?.split(' ')[0] || 'Requester'})</span>
           </div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
-            <span>Donor Hospital (Safdarjung)</span>
+            <span>Donor ({donorHospital?.name?.split(' ')[0] || 'Donor'})</span>
           </div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>

@@ -21,6 +21,7 @@ import {
   PhoneCall,
   RefreshCw,
   QrCode,
+  Users,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QrCodeModal } from '../components/QrCodeModal';
@@ -2055,14 +2056,29 @@ export const ReceptionistView: React.FC = () => {
                     </div>
                   )}
 
-                  <motion.button
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setShowQrModal(true)}
-                    className="text-xs font-mono text-accent font-bold hover:underline flex items-center space-x-1 pt-1"
-                  >
-                    <span>View & Download Check-In QR Pass</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </motion.button>
+                  <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setShowQrModal(true)}
+                      className="pulse-btn pulse-btn-secondary text-xs flex items-center justify-center space-x-1.5 py-2 flex-1"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>View & Download QR Pass</span>
+                    </motion.button>
+
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        const navEvt = new CustomEvent('navigate-view', { detail: { view: 'queue' } });
+                        window.dispatchEvent(navEvt);
+                      }}
+                      className="pulse-btn pulse-btn-primary text-xs flex items-center justify-center space-x-1.5 py-2 flex-1"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>Go to Live Queue & Scan QR →</span>
+                    </motion.button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

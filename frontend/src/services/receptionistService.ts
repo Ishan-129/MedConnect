@@ -80,7 +80,7 @@ export async function processReceptionistTurn(input: ReceptionistInput): Promise
       channel: input.channel || (serializedAudio ? 'mic' : 'text'),
       text: input.text,
       audioBlob: serializedAudio,
-      language: input.language || 'Hinglish',
+      language: input.language || 'English',
       hospitalId: input.hospitalId,
       patientName: input.patientName,
       patientPhone: input.patientPhone,
