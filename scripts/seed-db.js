@@ -70,6 +70,11 @@ const SQL_FILES = [
     description: 'Emergency tables, Haversine RPC, and atomic locking procedures',
   },
   {
+    name: '003_auth_and_profiles.sql',
+    path: path.resolve(process.cwd(), 'backend/migrations/003_auth_and_profiles.sql'),
+    description: 'Auth extensions for hospitals and patients, registration RPCs, isolated Telegram routing',
+  },
+  {
     name: 'seed.sql',
     path: path.resolve(process.cwd(), 'backend/seed.sql'),
     description: 'Real Delhi NCR hospitals (AIIMS, Safdarjung, Max), doctors, slots, and resources',

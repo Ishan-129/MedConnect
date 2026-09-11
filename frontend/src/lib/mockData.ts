@@ -9,56 +9,56 @@ export const AIIMS_COORDS = {
 
 export const INITIAL_HOSPITALS: Hospital[] = [
   {
-    hospital_id: 'hosp-aiims',
+    hospital_id: '11111111-1111-4111-a111-111111111111',
     name: 'AIIMS New Delhi (Main Campus)',
     latitude: 28.5672,
     longitude: 77.2100,
     contact: '+91-11-26588500',
-    telegram_chat_id: '-100293847501',
+    telegram_chat_id: '-1002345678901',
     active_status: true,
     distance_km: 0.0,
     supported_resources: ['O_NEG_BLOOD', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE']
   },
   {
-    hospital_id: 'hosp-safdarjung',
+    hospital_id: '22222222-2222-4222-a222-222222222222',
     name: 'VMM & Safdarjung Hospital',
     latitude: 28.5700,
     longitude: 77.2078,
-    contact: '+91-11-26730000',
-    telegram_chat_id: '-100293847502',
+    contact: '+91-11-26165060',
+    telegram_chat_id: '-1002345678902',
     active_status: true,
     distance_km: calculateDistanceKm(AIIMS_COORDS.lat, AIIMS_COORDS.lon, 28.5700, 77.2078),
     supported_resources: ['O_NEG_BLOOD', 'O_POS_BLOOD', 'OXYGEN', 'ICU_BED', 'VENTILATOR']
   },
   {
-    hospital_id: 'hosp-max-saket',
+    hospital_id: '33333333-3333-4333-a333-333333333333',
     name: 'Max Super Speciality Hospital, Saket',
     latitude: 28.5283,
     longitude: 77.2114,
     contact: '+91-11-26515050',
-    telegram_chat_id: '-100293847503',
+    telegram_chat_id: '-1002345678903',
     active_status: true,
     distance_km: calculateDistanceKm(AIIMS_COORDS.lat, AIIMS_COORDS.lon, 28.5283, 77.2114),
     supported_resources: ['O_NEG_BLOOD', 'ICU_BED', 'VENTILATOR', 'MEDICINE']
   },
   {
-    hospital_id: 'hosp-fortis-escorts',
+    hospital_id: '44444444-4444-4444-a444-444444444444',
     name: 'Fortis Escorts Heart Institute, Okhla',
     latitude: 28.5603,
     longitude: 77.2764,
     contact: '+91-11-47135000',
-    telegram_chat_id: '-100293847504',
+    telegram_chat_id: '-1002345678904',
     active_status: true,
     distance_km: calculateDistanceKm(AIIMS_COORDS.lat, AIIMS_COORDS.lon, 28.5603, 77.2764),
     supported_resources: ['OXYGEN', 'VENTILATOR', 'ICU_BED', 'AMBULANCE']
   },
   {
-    hospital_id: 'hosp-apollo',
+    hospital_id: '55555555-5555-4555-a555-555555555555',
     name: 'Indraprastha Apollo Hospital, Sarita Vihar',
     latitude: 28.5398,
     longitude: 77.2832,
     contact: '+91-11-26925858',
-    telegram_chat_id: '-100293847505',
+    telegram_chat_id: '-1002345678905',
     active_status: true,
     distance_km: calculateDistanceKm(AIIMS_COORDS.lat, AIIMS_COORDS.lon, 28.5398, 77.2832),
     supported_resources: ['O_NEG_BLOOD', 'O_POS_BLOOD', 'OXYGEN', 'ICU_BED']

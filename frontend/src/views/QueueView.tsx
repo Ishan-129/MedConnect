@@ -6,9 +6,16 @@ import { INITIAL_QUEUE } from '../lib/mockData';
 import { QueueEntry, QueueStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import { motionTokens, springs } from '../lib/motionTokens';
+import { useAuth } from '../context/AuthContext';
 
-export const QueueView: React.FC = () => {
-  const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>('reception');
+interface QueueViewProps {
+  defaultRole?: 'patient' | 'reception' | 'doctor';
+  hideRoleSwitcher?: boolean;
+}
+
+export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception', hideRoleSwitcher = false }) => {
+  const { activePatient, openAuthModal } = useAuth();
+  const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>(defaultRole);
   const [queue, setQueue] = useState<QueueEntry[]>(INITIAL_QUEUE);
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -72,76 +79,80 @@ export const QueueView: React.FC = () => {
   return (
     <div className="space-y-8 animate-fade-in-up">
       
-      {/* View Header & Module Badge */}
+      {/* View Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-rule gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <span className="pulse-badge pulse-badge-green">
-              Pillar 1 · Module 2
+              Live OPD Operations
             </span>
-            <span className="text-xs font-mono text-ink-muted">Assigned: Ishan Varshney (Dev 2)</span>
+            <span className="text-xs font-mono text-ink-muted">Real-time Queue State Engine</span>
           </div>
           <h1 className="pulse-h2 text-2xl font-bold text-ink mt-1">
-            Realtime Live Queue & Check-In Engine
+            {roleView === 'patient' ? 'My OPD Queue Status & Waiting Token' : 'Realtime Live Queue & Check-In Desk'}
           </h1>
           <p className="pulse-text-sm text-ink-muted mt-0.5">
-            QR verification, dynamic FIFO position calculation, receptionist desk triggers & doctor room sync.
+            {roleView === 'patient' 
+              ? 'Real-time estimated wait time, position tracking, and turn notification.' 
+              : 'QR verification, dynamic FIFO position calculation, receptionist desk triggers & doctor room sync.'}
           </p>
         </div>
 
         {/* 3-Way Role Switcher with Animated Pill */}
-        <div className="flex items-center bg-paper-subtle p-1 rounded-xl border border-rule relative">
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setRoleView('reception')}
-            className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-              roleView === 'reception' ? 'text-white' : 'text-ink-muted hover:text-ink'
-            }`}
-          >
-            {roleView === 'reception' && (
-              <motion.div
-                layoutId="queueRoleTab"
-                className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
-                transition={springs.snappy}
-              />
-            )}
-            <span className="relative z-10">Reception Desk</span>
-          </motion.button>
+        {!hideRoleSwitcher && (
+          <div className="flex items-center bg-paper-subtle p-1 rounded-xl border border-rule relative">
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setRoleView('reception')}
+              className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                roleView === 'reception' ? 'text-white' : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              {roleView === 'reception' && (
+                <motion.div
+                  layoutId="queueRoleTab"
+                  className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
+                  transition={springs.snappy}
+                />
+              )}
+              <span className="relative z-10">Reception Desk</span>
+            </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setRoleView('doctor')}
-            className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-              roleView === 'doctor' ? 'text-white' : 'text-ink-muted hover:text-ink'
-            }`}
-          >
-            {roleView === 'doctor' && (
-              <motion.div
-                layoutId="queueRoleTab"
-                className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
-                transition={springs.snappy}
-              />
-            )}
-            <span className="relative z-10">Doctor Panel</span>
-          </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setRoleView('doctor')}
+              className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                roleView === 'doctor' ? 'text-white' : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              {roleView === 'doctor' && (
+                <motion.div
+                  layoutId="queueRoleTab"
+                  className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
+                  transition={springs.snappy}
+                />
+              )}
+              <span className="relative z-10">Doctor Panel</span>
+            </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setRoleView('patient')}
-            className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-              roleView === 'patient' ? 'text-white' : 'text-ink-muted hover:text-ink'
-            }`}
-          >
-            {roleView === 'patient' && (
-              <motion.div
-                layoutId="queueRoleTab"
-                className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
-                transition={springs.snappy}
-              />
-            )}
-            <span className="relative z-10">Patient Tracker</span>
-          </motion.button>
-        </div>
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setRoleView('patient')}
+              className={`relative px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
+                roleView === 'patient' ? 'text-white' : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              {roleView === 'patient' && (
+                <motion.div
+                  layoutId="queueRoleTab"
+                  className="absolute inset-0 bg-accent rounded-lg shadow-hairline"
+                  transition={springs.snappy}
+                />
+              )}
+              <span className="relative z-10">Patient View</span>
+            </motion.button>
+          </div>
+        )}
       </div>
 
       {/* Top Telemetry KPI Row */}
@@ -437,8 +448,20 @@ export const QueueView: React.FC = () => {
               <span className="pulse-badge pulse-badge-blue">Your Live Ticket</span>
               <h2 className="pulse-h1 text-4xl font-extrabold text-accent mt-2 tabular-nums">#MED-4029</h2>
               <p className="text-xs font-mono text-ink-2 mt-1 font-semibold">
-                Patient: Meenakshi Iyer · Dr. Priya Nair (Dermatology)
+                Patient: {activePatient?.name || 'Ananya Deshmukh'} {activePatient && `(${activePatient.blood_group})`} · Dr. Priya Nair (Dermatology)
               </p>
+              <div className="mt-2 flex items-center justify-center space-x-2">
+                <span className="text-[11px] font-mono text-ink-muted">
+                  Phone: {activePatient?.phone || '+91 98765 43210'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('patient', 'login')}
+                  className="text-[10px] font-mono text-accent hover:underline ml-1"
+                >
+                  (Switch Account)
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4 py-4 border-y border-rule">

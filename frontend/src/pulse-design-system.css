@@ -12,16 +12,16 @@
    ========================================================================== */
 
 :root {
-  /* Color Space: Primary Light Canvas (Zinc-tinted clinical paper) */
-  --color-paper: #f8fafc;
+  /* Color Space: Primary Light Canvas (Warm clinical off-white paper) */
+  --color-paper: #f8f9fa;
   --color-paper-2: #ffffff;
-  --color-paper-subtle: #f1f5f9;
+  --color-paper-subtle: #f1f3f5;
   --color-paper-overlay: rgba(15, 23, 42, 0.45);
 
   /* Dual OKLCH definitions for P3 wide-gamut displays */
-  --color-paper-oklch: oklch(98.5% 0.005 240);
+  --color-paper-oklch: oklch(98.2% 0.005 90);
   --color-paper-2-oklch: oklch(100% 0 0);
-  --color-paper-subtle-oklch: oklch(96.5% 0.008 240);
+  --color-paper-subtle-oklch: oklch(96.0% 0.008 90);
 
   /* Typography Inks (High-contrast clinical slate/navy) */
   --color-ink: #0f172a;
@@ -30,8 +30,8 @@
   --color-ink-faint: #94a3b8;
 
   /* Structural Rules & Borders (Crisp 1px hairlines) */
-  --color-rule: #e2e8f0;
-  --color-rule-subtle: #f1f5f9;
+  --color-rule: #e5e7eb;
+  --color-rule-subtle: #f1f3f5;
 
   /* Semantic Accent: Medical Sapphire Blue (<= 5% viewport rule) */
   --color-accent: #2563eb;

@@ -5,13 +5,24 @@ import { motion, AnimatePresence } from 'motion/react';
 import { INITIAL_DOCTORS } from '../lib/mockData';
 import { QrCodeModal } from '../components/QrCodeModal';
 import { motionTokens, springs } from '../lib/motionTokens';
+import { useAuth } from '../context/AuthContext';
 
 export const ReceptionistView: React.FC = () => {
+  const { activePatient, openAuthModal } = useAuth();
+
   const [isRecording, setIsRecording] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN'>('hi-IN');
   const [transcript, setTranscript] = useState('');
-  const [patientName, setPatientName] = useState('Ananya Deshmukh');
-  const [patientPhone, setPatientPhone] = useState('+91 98765 43210');
+  const [patientName, setPatientName] = useState(activePatient?.name || 'Ananya Deshmukh');
+  const [patientPhone, setPatientPhone] = useState(activePatient?.phone || '+91 98765 43210');
+
+  // Keep synced with activePatient if switched
+  React.useEffect(() => {
+    if (activePatient) {
+      setPatientName(activePatient.name);
+      setPatientPhone(activePatient.phone);
+    }
+  }, [activePatient]);
   const [symptoms, setSymptoms] = useState('I have had an itchy skin rash and redness on my arm for 3 days.');
   const [selectedDepartment, setSelectedDepartment] = useState('Dermatology');
   const [selectedDoctorId, setSelectedDoctorId] = useState('doc-2');
@@ -57,20 +68,20 @@ export const ReceptionistView: React.FC = () => {
   return (
     <div className="space-y-8 animate-fade-in-up">
       
-      {/* View Header & Module Badge */}
+      {/* View Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-rule gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <span className="pulse-badge pulse-badge-blue">
-              Pillar 1 · Module 1
+              Patient Care Portal
             </span>
-            <span className="text-xs font-mono text-ink-muted">Assigned: Ayank Kumar (Dev 1)</span>
+            <span className="text-xs font-mono text-ink-muted">Voice AI OPD Booking Desk</span>
           </div>
           <h1 className="pulse-h2 text-2xl font-bold text-ink mt-1">
             Multilingual Voice AI Receptionist
           </h1>
           <p className="pulse-text-sm text-ink-muted mt-0.5">
-            Sarvam AI Saaras:v1 STT + OpenAI GPT-4o-mini administrative intent classifier & atomic OPD slot lock.
+            Sarvam AI Saaras:v1 STT + OpenAI administrative intent classifier & atomic OPD slot lock.
           </p>
         </div>
 
@@ -86,6 +97,30 @@ export const ReceptionistView: React.FC = () => {
               <option value="en-IN">English (en-IN)</option>
             </select>
           </div>
+        </div>
+      </div>
+
+      {/* Patient Account Context Strip */}
+      <div className="p-3 bg-paper-subtle rounded-xl border border-rule flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-mono text-xs shadow-hairline">
+        <div className="flex items-center space-x-2">
+          <User className="w-4 h-4 text-accent shrink-0" />
+          <span className="text-ink-muted">Patient OPD Record:</span>
+          <strong className="text-ink font-bold">{patientName}</strong>
+          {activePatient && (
+            <span className="px-1.5 py-0.2 rounded bg-accent-light text-accent text-[10px] font-bold">
+              Blood {activePatient.blood_group}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center space-x-2">
+          <span className="text-ink-muted text-[11px]">{patientPhone}</span>
+          <button
+            type="button"
+            onClick={() => openAuthModal('patient', 'login')}
+            className="pulse-btn pulse-btn-sm pulse-btn-secondary text-[10px] font-mono whitespace-nowrap"
+          >
+            Switch Patient Profile
+          </button>
         </div>
       </div>
 

@@ -137,3 +137,31 @@ export interface AppointmentPassPayload {
   exp: string;
   signature: string;
 }
+
+export interface HospitalUser {
+  hospital_id: string;
+  name: string;
+  contact: string;
+  telegram_chat_id: string;
+  latitude: number;
+  longitude: number;
+  address?: string;
+  contact_email?: string;
+  contact_person?: string;
+  verification_status: 'VERIFIED' | 'PENDING' | 'REJECTED';
+  supported_resources: ResourceType[];
+}
+
+export interface PatientUser {
+  patient_id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  blood_group: string;
+  age?: number;
+  gender?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  address?: string;
+}
+

@@ -25,43 +25,43 @@ export const Footer: React.FC = () => {
             </div>
           </div>
 
-          {/* Col 2: Hackathon Team */}
+          {/* Col 2: Engineering Team */}
           <div className="space-y-2">
             <h4 className="text-xs font-mono uppercase text-ink font-bold tracking-wider">
-              Team: 4 Bit Minds
+              Engineering Team
             </h4>
             <ul className="text-xs space-y-1.5 font-mono text-ink-muted">
-              <li><strong className="text-ink">Ayank Kumar</strong> (Lead · Dev 1)</li>
-              <li><strong className="text-ink">Ishan Varshney</strong> (Backend · Dev 2)</li>
-              <li><strong className="text-ink">Ishaan Sama</strong> (Frontend · Dev 3)</li>
-              <li><strong className="text-ink">Bhavya Gupta</strong> (Integration · Dev 4)</li>
+              <li><strong className="text-ink">Ayank Kumar</strong></li>
+              <li><strong className="text-ink">Ishan Varshney</strong></li>
+              <li><strong className="text-ink">Ishaan Sama</strong></li>
+              <li><strong className="text-ink">Bhavya Gupta</strong></li>
             </ul>
             <p className="text-[10px] text-ink-faint pt-1">
-              JIMS Engineering Management Technical Campus
+              4 Bit Minds · Healthcare Automation
             </p>
           </div>
 
-          {/* Col 3: Specifications & References */}
+          {/* Col 3: Technology Stack */}
           <div className="space-y-2">
             <h4 className="text-xs font-mono uppercase text-ink font-bold tracking-wider">
-              Artifacts & Stack
+              Platform Stack
             </h4>
             <ul className="text-xs space-y-1.5 font-mono">
-              <li className="flex items-center space-x-1.5 text-ink-muted hover:text-accent transition-colors">
-                <FileText className="w-3.5 h-3.5 text-accent" />
-                <span>MedConnect_Pulse_Spec_.md</span>
-              </li>
               <li className="flex items-center space-x-1.5 text-ink-muted hover:text-operational transition-colors">
                 <Terminal className="w-3.5 h-3.5 text-operational" />
-                <span>n8n Workflows (WF1 to WF7)</span>
+                <span>n8n Cloud Automation Engine</span>
               </li>
               <li className="flex items-center space-x-1.5 text-ink-muted">
                 <span className="pulse-dot pulse-dot-green" />
-                <span>Sarvam AI saaras:v1 STT</span>
+                <span>Sarvam AI Saaras:v1 STT</span>
               </li>
               <li className="flex items-center space-x-1.5 text-ink-muted">
                 <span className="pulse-dot pulse-dot-blue" />
-                <span>Supabase PostgreSQL + RLS</span>
+                <span>Supabase PostgreSQL + Realtime</span>
+              </li>
+              <li className="flex items-center space-x-1.5 text-ink-muted">
+                <span className="pulse-dot pulse-dot-green" />
+                <span>Telegram Bot (@MedConnecttbot)</span>
               </li>
             </ul>
           </div>

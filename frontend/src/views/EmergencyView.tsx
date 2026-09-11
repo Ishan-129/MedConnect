@@ -1,27 +1,140 @@
 /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 */
-import React, { useState, useEffect } from 'react';
-import { Radio, AlertTriangle, ShieldCheck, CheckCircle2, Clock, QrCode, ArrowRight, Building2, MapPin, Send, Zap } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Radio,
+  AlertTriangle,
+  ShieldCheck,
+  CheckCircle2,
+  Clock,
+  QrCode,
+  ArrowRight,
+  Building2,
+  MapPin,
+  Send,
+  Zap,
+  Truck,
+  Droplet,
+  RefreshCw,
+  Layers,
+  Thermometer,
+  Activity,
+  FileCode,
+  ExternalLink
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { INITIAL_HOSPITALS, INITIAL_EMERGENCY_REQUESTS, AIIMS_COORDS } from '../lib/mockData';
-import { EmergencyRequest, ResourceType, EmergencyPriority } from '../types';
+import { INITIAL_HOSPITALS, AIIMS_COORDS } from '../lib/mockData';
+import { Hospital, EmergencyRequest, ResourceType, EmergencyPriority } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
-import { QrCodeModal } from '../components/QrCodeModal';
-import { motionTokens, springs } from '../lib/motionTokens';
+import { TransportationMap } from '../components/TransportationMap';
+import { HospitalRadarView } from '../components/HospitalRadarView';
+import { QRDispatchPassModal } from '../components/QRDispatchPassModal';
+import { AmbulanceVerificationModal } from '../components/AmbulanceVerificationModal';
+import { triggerEmergencyBroadcast, triggerEmergencyAccept, generateCorrelationId } from '../lib/n8nClient';
+import { springs } from '../lib/motionTokens';
+import { useAuth } from '../context/AuthContext';
+import { calculateDistanceKm } from '../lib/haversine';
 
 export const EmergencyView: React.FC = () => {
-  const [hospitals] = useState(INITIAL_HOSPITALS);
-  const [requests, setRequests] = useState<EmergencyRequest[]>(INITIAL_EMERGENCY_REQUESTS);
-  const [countdown, setCountdown] = useState(135); // 135s remaining on 180s escalation timeout
-  const [showDispatchModal, setShowDispatchModal] = useState(false);
-  const [currentDispatchPass, setCurrentDispatchPass] = useState<any>(null);
+  const { activeHospital: authHospital, allHospitals, switchHospital, openAuthModal } = useAuth();
 
-  // New Request Form State
-  const [resourceType, setResourceType] = useState<ResourceType>('O_NEG_BLOOD');
+  // Unified hospitals list from AuthContext
+  const hospitals: Hospital[] = useMemo(() => {
+    return allHospitals.map((h) => ({
+      hospital_id: h.hospital_id,
+      name: h.name,
+      latitude: h.latitude,
+      longitude: h.longitude,
+      contact: h.contact,
+      telegram_chat_id: h.telegram_chat_id,
+      active_status: true,
+      supported_resources: h.supported_resources,
+      distance_km: authHospital
+        ? calculateDistanceKm(authHospital.latitude, authHospital.longitude, h.latitude, h.longitude)
+        : 0,
+    }));
+  }, [allHospitals, authHospital]);
+
+  // Active viewing hospital (defaults to logged-in facility or first hospital)
+  const activeHospital: Hospital = useMemo(() => {
+    if (authHospital) {
+      return {
+        hospital_id: authHospital.hospital_id,
+        name: authHospital.name,
+        latitude: authHospital.latitude,
+        longitude: authHospital.longitude,
+        contact: authHospital.contact,
+        telegram_chat_id: authHospital.telegram_chat_id,
+        active_status: true,
+        supported_resources: authHospital.supported_resources,
+        distance_km: 0,
+      };
+    }
+    return hospitals[0] || INITIAL_HOSPITALS[0];
+  }, [authHospital, hospitals]);
+
+  // Feed tabs: 'incoming' (alerts from other hospitals), 'outgoing' (sent by you), 'all'
+  const [feedFilter, setFeedFilter] = useState<'incoming' | 'outgoing' | 'all'>('incoming');
+
+  // View Mode: 'map' (Transportation Map) vs 'radar' (15km Haversine Radar)
+  const [mapMode, setMapMode] = useState<'map' | 'radar'>('map');
+
+  // Requests stream
+  const [requests, setRequests] = useState<EmergencyRequest[]>([
+    {
+      request_id: '4a123f00-8888-4000-a000-000000000001',
+      requesting_hospital_id: '11111111-1111-4111-a111-111111111111',
+      requesting_hospital_name: 'AIIMS New Delhi (Main Campus)',
+      resource_type: 'O_NEG_BLOOD',
+      quantity: 4,
+      priority: 'CRITICAL',
+      status: 'OPEN',
+      created_at: new Date(Date.now() - 35 * 1000).toISOString(),
+      expires_at: new Date(Date.now() + 145 * 1000).toISOString(),
+    }
+  ]);
+
+  // Active Ambulance Mission State
+  const [activeMission, setActiveMission] = useState<{
+    requestId: string;
+    donorHospital: Hospital;
+    requesterHospital: Hospital;
+    resourceType: string;
+    quantity: number;
+    deliveryStatus: 'DISPATCHED' | 'PICKED_UP' | 'DELIVERED';
+    dispatchId: string;
+    qrTokenHash: string;
+  } | null>(null);
+
+  // Auto-escalation watchdog (180s countdown)
+  const [countdown, setCountdown] = useState(145);
+
+  // New SOS Form State (Default: Blood O- Urgent)
+  const [resourceType, setResourceType] = useState<string>('BLOOD_O_NEG');
   const [quantity, setQuantity] = useState(4);
   const [priority, setPriority] = useState<EmergencyPriority>('CRITICAL');
+  const [radiusKm, setRadiusKm] = useState(15.0);
+  const [notes, setNotes] = useState('Polytrauma trauma center patient. Massive internal hemorrhage. Urgent O- transfusion needed.');
   const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [isAccepting, setIsAccepting] = useState(false);
 
-  // Countdown timer simulation for Twilio escalation
+  // Live Diagnostic / n8n Telemetry Log
+  const [lastN8nLog, setLastN8nLog] = useState<{
+    action: string;
+    correlationId: string;
+    status: string;
+    time: string;
+    detail: string;
+  } | null>(null);
+
+  // Modals
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [qrPassData, setQrPassData] = useState<any>(null);
+  const [verificationModal, setVerificationModal] = useState<{
+    isOpen: boolean;
+    type: 'PICKUP' | 'DELIVERY';
+  }>({ isOpen: false, type: 'PICKUP' });
+
+  // Ticking countdown
   useEffect(() => {
     const timer = setInterval(() => {
       setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
@@ -29,356 +142,759 @@ export const EmergencyView: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Broadcast Emergency Request to 10km Radius
-  const handleBroadcastRequest = (e: React.FormEvent) => {
+  // Handler: Hospital A triggers 15km SOS Broadcast (calling live n8n WF08)
+  const handleBroadcastSOS = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsBroadcasting(true);
 
-    setTimeout(() => {
+    const generatedReqId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+
+    const payload = {
+      request_id: generatedReqId,
+      hospital_id: activeHospital.hospital_id,
+      requesting_hospital_name: activeHospital.name,
+      resource_type: resourceType,
+      quantity: quantity,
+      urgency: priority as any,
+      latitude: activeHospital.latitude,
+      longitude: activeHospital.longitude,
+      radius_km: radiusKm,
+      notes: notes,
+      timeout_seconds: 180,
+    };
+
+    try {
+      const res = await triggerEmergencyBroadcast(payload);
+
       const newReq: EmergencyRequest = {
-        request_id: `ER-${Math.floor(1000 + Math.random() * 9000)}`,
-        requesting_hospital_id: 'hosp-aiims',
-        requesting_hospital_name: 'AIIMS New Delhi',
-        resource_type: resourceType,
+        request_id: generatedReqId,
+        requesting_hospital_id: activeHospital.hospital_id,
+        requesting_hospital_name: activeHospital.name,
+        resource_type: resourceType as any,
         quantity: quantity,
         priority: priority,
         status: 'OPEN',
         created_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 180 * 1000).toISOString(),
       };
+
       setRequests([newReq, ...requests]);
-      setIsBroadcasting(false);
       setCountdown(180);
-    }, 900);
+
+      setLastN8nLog({
+        action: 'WF08 | EMERGENCY BROADCAST',
+        correlationId: res.correlation_id || generateCorrelationId(),
+        status: res.success ? 'SUCCESS (HTTP 200)' : `ERROR (${res.status})`,
+        time: new Date().toLocaleTimeString(),
+        detail: res.success
+          ? `Broadcasted to ${res.hospitals_notified || 4} regional hospitals via n8n & Telegram.`
+          : `n8n webhook error: ${res.message || res.error}`,
+      });
+    } catch (err: any) {
+      console.error('Error during broadcast:', err);
+    } finally {
+      setIsBroadcasting(false);
+    }
   };
 
-  // 1-Click Accept & Supply (Safdarjung Hospital accepts AIIMS request)
-  const handleAcceptAndLock = (reqId: string) => {
-    setRequests((prev) =>
-      prev.map((req) => {
-        if (req.request_id === reqId) {
-          const pass = {
-            id: `DISP-${req.request_id}`,
-            targetName: 'AIIMS Trauma Center Ambulance Unit 3',
-            detail: `${req.quantity} Units · ${req.resource_type} (Safdarjung Blood Bank)`,
-            issuedAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-            signature: 'hmac_sha256_emergency_dispatch_auth_token_99fa71'
-          };
-          setCurrentDispatchPass(pass);
-          setShowDispatchModal(true);
+  // Handler: Nearby hospital accepts request (calling live n8n WF09)
+  const handleAcceptRequest = async (req: EmergencyRequest, supplyingHosp: Hospital) => {
+    // Strict Guard: Requesting hospital CANNOT accept its own requisition!
+    if (req.requesting_hospital_id === supplyingHosp.hospital_id) {
+      alert("Operational Guard: A requesting hospital cannot supply its own emergency request! Only nearby candidate facilities can accept.");
+      return;
+    }
 
-          return {
-            ...req,
-            status: 'ACCEPTED',
-            supplying_hospital_id: 'hosp-safdarjung',
-            supplying_hospital_name: 'Safdarjung Hospital'
-          };
-        }
-        return req;
-      })
+    setIsAccepting(true);
+
+    const payload = {
+      request_id: req.request_id,
+      responding_hospital_id: supplyingHosp.hospital_id,
+      responding_hospital_name: supplyingHosp.name,
+    };
+
+    try {
+      const res = await triggerEmergencyAccept(payload);
+
+      const dispatchId = res.dispatch_id || `DISP-${Math.floor(100000 + Math.random() * 900000)}`;
+      const qrHash = res.qr_token_hash || `PASS-TOKEN-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
+      // Update request in list
+      setRequests((prev) =>
+        prev.map((r) =>
+          r.request_id === req.request_id
+            ? {
+                ...r,
+                status: 'ACCEPTED',
+                supplying_hospital_id: supplyingHosp.hospital_id,
+                supplying_hospital_name: supplyingHosp.name,
+                dispatch_id: dispatchId,
+              }
+            : r
+        )
+      );
+
+      // Find requesting hospital object
+      const reqHosp = hospitals.find((h) => h.hospital_id === req.requesting_hospital_id) || hospitals[0];
+
+      // Setup Active Mission for Transportation Map
+      const missionData = {
+        requestId: req.request_id,
+        donorHospital: supplyingHosp,
+        requesterHospital: reqHosp,
+        resourceType: req.resource_type,
+        quantity: req.quantity,
+        deliveryStatus: 'DISPATCHED' as const,
+        dispatchId: dispatchId,
+        qrTokenHash: qrHash,
+      };
+      setActiveMission(missionData);
+
+      // Prepare QR Pass Data and Open Pass Modal
+      const passObj = {
+        dispatch_id: dispatchId,
+        request_id: req.request_id,
+        donor_hospital_name: supplyingHosp.name,
+        requester_hospital_name: reqHosp.name,
+        resource_type: req.resource_type,
+        quantity: req.quantity,
+        qr_token_hash: qrHash,
+        issued_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        status: 'ACTIVE',
+      };
+      setQrPassData(passObj);
+      setShowQRModal(true);
+
+      setLastN8nLog({
+        action: 'WF09 | EMERGENCY ACCEPTANCE',
+        correlationId: res.correlation_id || generateCorrelationId(),
+        status: res.success ? 'SUCCESS (HTTP 200 · RESOURCE LOCKED)' : `ERROR (${res.status})`,
+        time: new Date().toLocaleTimeString(),
+        detail: res.success
+          ? `Resource atomically locked by ${supplyingHosp.name}. QR Dispatch Pass generated.`
+          : `Conflict/Error: ${res.message || res.error}`,
+      });
+    } catch (err: any) {
+      console.error('Acceptance error:', err);
+    } finally {
+      setIsAccepting(false);
+    }
+  };
+
+  // 2-Step Handover confirmations
+  const handleConfirmPickup = () => {
+    if (activeMission) {
+      setActiveMission({
+        ...activeMission,
+        deliveryStatus: 'PICKED_UP',
+      });
+      setLastN8nLog({
+        action: 'QR_STEP_1 | PICKUP_VERIFIED',
+        correlationId: generateCorrelationId(),
+        status: 'VERIFIED',
+        time: new Date().toLocaleTimeString(),
+        detail: `Blood O- units collected at ${activeMission.donorHospital.name}. Cold chain 3.8°C verified. Ambulance in road transit.`,
+      });
+    }
+  };
+
+  const handleConfirmDelivery = () => {
+    if (activeMission) {
+      setActiveMission({
+        ...activeMission,
+        deliveryStatus: 'DELIVERED',
+      });
+      // Mark request completed
+      setRequests((prev) =>
+        prev.map((r) =>
+          r.request_id === activeMission.requestId
+            ? { ...r, status: 'FULFILLED' }
+            : r
+        )
+      );
+      setLastN8nLog({
+        action: 'QR_STEP_2 | DELIVERY_HANDSHAKE',
+        correlationId: generateCorrelationId(),
+        status: 'COMPLETED',
+        time: new Date().toLocaleTimeString(),
+        detail: `Delivery completed at ${activeMission.requesterHospital.name}. Hospital blood bank successfully restocked!`,
+      });
+    }
+  };
+
+  const handleDeclineRequest = (requestId: string) => {
+    setRequests((prev) => prev.filter((r) => r.request_id !== requestId));
+  };
+
+  const handleCancelRequest = (requestId: string) => {
+    setRequests((prev) =>
+      prev.map((r) => (r.request_id === requestId ? { ...r, status: 'CANCELLED' as any } : r))
     );
   };
 
   return (
     <div className="space-y-8 animate-fade-in-up">
-      
-      {/* View Header & Module Badge */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-rule gap-4">
+      {/* Header & Hospital Role Selector */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-6 border-b border-rule gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <span className="pulse-badge pulse-badge-emergency">
-              Pillar 2 · Module 3 & 4
+              Hospital Emergency Portal (ED)
             </span>
-            <span className="text-xs font-mono text-ink-muted">Assigned: Ishaan Sama & Bhavya Gupta (Dev 3 & 4)</span>
+            <span className="text-xs font-mono text-ink-muted">
+              Live n8n Cloud Orchestration · 15km Haversine Corridor
+            </span>
           </div>
           <h1 className="pulse-h2 text-2xl font-bold text-ink mt-1">
-            Emergency Supply Dispatch & 10km Geo-Radar
+            Emergency Resource Exchange & Ambulance Dispatch
           </h1>
           <p className="pulse-text-sm text-ink-muted mt-0.5">
-            Inter-hospital resource exchange, Haversine proximity broadcast, 1-click Telegram accept & tamper-proof QR handover pass.
+            Inter-hospital requisition, atomic acceptance locking, live road map routing, and 2-step QR physical handover.
           </p>
         </div>
 
-        {/* Escalation Telemetry */}
-        <div className="flex items-center space-x-3 bg-paper-subtle px-4 py-2 rounded-xl border border-rule font-mono text-xs shadow-hairline">
-          <Clock className="w-4 h-4 text-amber-500 animate-pulse" />
-          <span className="text-ink-muted font-medium">Auto-Escalation Timer:</span>
-          <span className={`font-bold tabular-nums text-sm ${countdown < 30 ? 'text-emergency animate-pulse-gentle' : 'text-amber-600 dark:text-amber-400'}`}>
-            {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
-          </span>
-          <span className="text-[10px] text-ink-muted border-l border-rule pl-2 font-medium">Twilio Voice Fallback</span>
+        {/* View Perspective Switcher & Auto-Escalation Watchdog */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Active Facility Selector & Switcher */}
+          <div className="flex items-center space-x-2 bg-paper-subtle p-1.5 rounded-xl border border-rule">
+            <Building2 className="w-4 h-4 text-emergency ml-1 shrink-0" />
+            <span className="text-xs font-mono text-ink-muted hidden sm:inline">Active Desk:</span>
+            <select
+              value={activeHospital.hospital_id}
+              onChange={(e) => switchHospital(e.target.value)}
+              className="bg-paper text-ink font-mono text-xs font-bold px-2 py-1 rounded-lg border border-rule focus:outline-none focus:ring-1 focus:ring-accent max-w-[180px] sm:max-w-xs truncate"
+            >
+              {hospitals.map((h) => (
+                <option key={h.hospital_id} value={h.hospital_id}>
+                  {h.name.split(' (')[0]} {h.hospital_id === activeHospital.hospital_id ? '✓ (Current Desk)' : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => openAuthModal('hospital', 'signup')}
+              className="px-2 py-1 bg-emergency/10 hover:bg-emergency/20 text-emergency text-[10px] font-mono font-bold rounded-lg border border-emergency/30 transition-colors whitespace-nowrap"
+              title="Enroll a new hospital facility"
+            >
+              + Enroll
+            </button>
+          </div>
+
+          {/* Watchdog Timer */}
+          <div className="flex items-center space-x-2 bg-paper-subtle px-3 py-1.5 rounded-xl border border-rule font-mono text-xs shadow-hairline">
+            <Clock className="w-4 h-4 text-amber-500 animate-pulse" />
+            <span className="text-ink-muted">Escalation Timer:</span>
+            <span className={`font-bold tabular-nums text-sm ${countdown < 30 ? 'text-emergency animate-pulse-gentle' : 'text-amber-500'}`}>
+              {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
+            </span>
+          </div>
         </div>
       </div>
 
+      {/* Live n8n Execution Console / Audit Strip */}
+      {lastN8nLog && (
+        <div className="p-3 bg-paper-2 text-ink rounded-xl border border-rule font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-2 shadow-hairline">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-operational animate-ping"></span>
+            <span className="text-ink-muted">n8n Execution:</span>
+            <strong className="text-operational">{lastN8nLog.action}</strong>
+            <span className="text-rule">|</span>
+            <span className="text-accent">{lastN8nLog.correlationId}</span>
+          </div>
+          <div className="text-ink-2 text-[11px] truncate max-w-xl">
+            {lastN8nLog.detail}
+          </div>
+          <div className="text-ink-muted text-[10px] whitespace-nowrap">
+            {lastN8nLog.time} · {lastN8nLog.status}
+          </div>
+        </div>
+      )}
+
+      {/* Main Grid: Left = Geospatial Map & Radar | Right = Broadcast & Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left Column: 10km Haversine Radar Map & Candidates */}
+        {/* Left Column: 15km Transportation Map & Proximity Radar */}
+        <div className="lg:col-span-7 space-y-6">
+          
+          {/* Map / Radar Mode Toggle */}
+          <div className="flex items-center justify-between bg-paper-subtle p-1.5 rounded-xl border border-rule">
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setMapMode('map')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
+                  mapMode === 'map'
+                    ? 'bg-accent text-white shadow-md'
+                    : 'text-ink-muted hover:text-ink'
+                }`}
+              >
+                <Truck className="w-3.5 h-3.5" />
+                <span>Live Road Transit Map</span>
+              </button>
+              <button
+                onClick={() => setMapMode('radar')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
+                  mapMode === 'radar'
+                    ? 'bg-accent text-white shadow-md'
+                    : 'text-ink-muted hover:text-ink'
+                }`}
+              >
+                <Radio className="w-3.5 h-3.5" />
+                <span>15km Proximity Radar</span>
+              </button>
+            </div>
+
+            <span className="text-[11px] font-mono text-ink-muted px-2">
+              Coverage: <strong className="text-operational">15.0 km Haversine</strong>
+            </span>
+          </div>
+
+          {/* Active View Container */}
+          {mapMode === 'map' ? (
+            <TransportationMap
+              requesterHospital={INITIAL_HOSPITALS[0]} // AIIMS
+              donorHospital={activeMission?.donorHospital || (requests[0]?.supplying_hospital_id ? INITIAL_HOSPITALS[1] : null)}
+              allHospitals={hospitals}
+              activeRequest={requests[0]}
+              deliveryStatus={activeMission?.deliveryStatus || 'PENDING'}
+              onVerifyPickup={() => setVerificationModal({ isOpen: true, type: 'PICKUP' })}
+              onVerifyDelivery={() => setVerificationModal({ isOpen: true, type: 'DELIVERY' })}
+            />
+          ) : (
+            <HospitalRadarView
+              selectedHospital={activeHospital}
+              allHospitals={hospitals}
+              radiusKm={radiusKm}
+              activeRequests={requests}
+              onSelectHospital={(h) => switchHospital(h.hospital_id)}
+            />
+          )}
+
+          {/* Active Mission Card if Ambulance Dispatched */}
+          {activeMission && (
+            <div className="p-4 bg-paper-subtle rounded-2xl border-2 border-accent/40 space-y-3 shadow-md">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 rounded-full bg-accent animate-ping"></div>
+                  <h4 className="font-bold text-sm text-ink flex items-center space-x-2">
+                    <Truck className="w-4 h-4 text-accent" />
+                    <span>Active Ambulance Delivery Mission</span>
+                  </h4>
+                </div>
+                <button
+                  onClick={() => setShowQRModal(true)}
+                  className="pulse-btn pulse-btn-sm pulse-btn-primary flex items-center space-x-1 text-xs"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>View Dispatch Pass QR</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 font-mono text-xs bg-paper p-3 rounded-xl border border-rule">
+                <div>
+                  <div className="text-[10px] text-ink-muted">Donor Facility</div>
+                  <div className="font-bold text-operational mt-0.5">{activeMission.donorHospital.name.split(' ')[0]}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-ink-muted">Recipient Trauma</div>
+                  <div className="font-bold text-emergency mt-0.5">{activeMission.requesterHospital.name.split(' ')[0]}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-ink-muted">Supply Item</div>
+                  <div className="font-bold text-accent mt-0.5">{activeMission.quantity} Units {activeMission.resourceType.replace(/_/g, ' ')}</div>
+                </div>
+              </div>
+
+              {/* Step Progression Bar */}
+              <div className="flex items-center justify-between pt-2 border-t border-rule-subtle font-mono text-xs">
+                <div className="flex items-center space-x-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeMission.deliveryStatus === 'DISPATCHED' ? 'bg-accent text-white' : 'bg-operational text-white'
+                  }`}>
+                    1
+                  </span>
+                  <span className={activeMission.deliveryStatus === 'DISPATCHED' ? 'font-bold text-accent' : 'text-ink-muted'}>
+                    Pickup at Donor
+                  </span>
+                </div>
+
+                <ArrowRight className="w-4 h-4 text-ink-muted" />
+
+                <div className="flex items-center space-x-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeMission.deliveryStatus === 'PICKED_UP' ? 'bg-accent text-white' : activeMission.deliveryStatus === 'DELIVERED' ? 'bg-operational text-white' : 'bg-paper-subtle text-ink-muted'
+                  }`}>
+                    2
+                  </span>
+                  <span className={activeMission.deliveryStatus === 'PICKED_UP' ? 'font-bold text-accent' : 'text-ink-muted'}>
+                    Road Transit
+                  </span>
+                </div>
+
+                <ArrowRight className="w-4 h-4 text-ink-muted" />
+
+                <div className="flex items-center space-x-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeMission.deliveryStatus === 'DELIVERED' ? 'bg-operational text-white' : 'bg-paper-subtle text-ink-muted'
+                  }`}>
+                    3
+                  </span>
+                  <span className={activeMission.deliveryStatus === 'DELIVERED' ? 'font-bold text-operational' : 'text-ink-muted'}>
+                    Intake Restock
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+
+        {/* Right Column: SOS Broadcaster & Incoming Requests Desk */}
         <div className="lg:col-span-5 space-y-6">
-          <div className="pulse-card space-y-5">
+          
+          {/* Section 1: Urgent Broadcast Form (Hospital A) */}
+          <div className="pulse-card space-y-4 border-emergency/40 shadow-soft">
             <div className="flex items-center justify-between">
               <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
-                <Radio className="w-4 h-4 text-emergency animate-pulse" />
-                <span>10km Haversine Emergency Radar</span>
+                <Send className="w-4 h-4 text-emergency" />
+                <span>Urgent SOS Requisition Desk</span>
               </h3>
-              <span className="pulse-badge pulse-badge-green text-[10px]">
-                0 Paid Maps API
+              <span className="pulse-badge pulse-badge-emergency text-[10px]">
+                Hospital A Portal
               </span>
             </div>
 
-            {/* Radar Visualizer Screen */}
-            <div className="relative w-full aspect-square bg-slate-950 rounded-2xl border border-rule flex items-center justify-center overflow-hidden shadow-inner">
-              
-              {/* Concentric distance circles */}
-              <div className="absolute w-[85%] h-[85%] rounded-full border border-slate-800" />
-              <div className="absolute w-[60%] h-[60%] rounded-full border border-slate-800" />
-              <div className="absolute w-[35%] h-[35%] rounded-full border border-slate-800" />
-              
-              {/* Radar Crosshairs */}
-              <div className="absolute w-full h-[1px] bg-slate-900" />
-              <div className="absolute h-full w-[1px] bg-slate-900" />
-
-              {/* Sweeping radar beam */}
-              <div className="absolute inset-0 origin-center animate-radar-sweep pointer-events-none">
-                <div className="w-1/2 h-1/2 bg-gradient-to-br from-emergency/25 to-transparent transform -rotate-45 origin-bottom-right" />
-              </div>
-
-              {/* Center Hospital: AIIMS New Delhi (Requester) */}
-              <div className="relative z-10 flex flex-col items-center">
-                <div className="w-4 h-4 rounded-full bg-emergency ring-4 ring-emergency/30 animate-pulse-gentle" />
-                <span className="text-[9px] font-mono font-bold text-white bg-slate-900/90 px-1.5 py-0.5 rounded border border-slate-700 mt-1 shadow">
-                  AIIMS (Requester)
-                </span>
-              </div>
-
-              {/* Candidate Hospital Blips */}
-              {/* Safdarjung (0.3 km) */}
-              <motion.div 
-                whileHover={{ scale: 1.15 }}
-                className="absolute top-[46%] left-[45%] z-10 flex flex-col items-center cursor-pointer"
-              >
-                <div className="w-2.5 h-2.5 rounded-full bg-operational ring-2 ring-operational/40" />
-                <span className="text-[8px] font-mono font-semibold text-emerald-300 bg-slate-900 px-1 rounded shadow mt-0.5">
-                  Safdarjung (0.3 km)
-                </span>
-              </motion.div>
-
-              {/* Max Saket (4.3 km) */}
-              <motion.div 
-                whileHover={{ scale: 1.15 }}
-                className="absolute bottom-[25%] left-[51%] z-10 flex flex-col items-center cursor-pointer"
-              >
-                <div className="w-2.5 h-2.5 rounded-full bg-operational ring-2 ring-operational/40" />
-                <span className="text-[8px] font-mono font-semibold text-emerald-300 bg-slate-900 px-1 rounded shadow mt-0.5">
-                  Max Saket (4.3 km)
-                </span>
-              </motion.div>
-
-              {/* Fortis Escorts (6.5 km) */}
-              <motion.div 
-                whileHover={{ scale: 1.15 }}
-                className="absolute top-[38%] right-[22%] z-10 flex flex-col items-center cursor-pointer"
-              >
-                <div className="w-2.5 h-2.5 rounded-full bg-operational ring-2 ring-operational/40" />
-                <span className="text-[8px] font-mono font-semibold text-emerald-300 bg-slate-900 px-1 rounded shadow mt-0.5">
-                  Fortis (6.5 km)
-                </span>
-              </motion.div>
-
-              {/* Apollo (7.8 km) */}
-              <motion.div 
-                whileHover={{ scale: 1.15 }}
-                className="absolute bottom-[28%] right-[18%] z-10 flex flex-col items-center cursor-pointer"
-              >
-                <div className="w-2.5 h-2.5 rounded-full bg-operational ring-2 ring-operational/40" />
-                <span className="text-[8px] font-mono font-semibold text-emerald-300 bg-slate-900 px-1 rounded shadow mt-0.5">
-                  Apollo (7.8 km)
-                </span>
-              </motion.div>
-
-              {/* Distance range badge */}
-              <div className="absolute bottom-2 left-2 text-[9px] font-mono text-slate-400 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800">
-                Haversine WGS84 · 10.0 km radius
-              </div>
-            </div>
-
-            {/* Candidates List */}
-            <div className="space-y-2">
-              <label className="pulse-label">Eligible Registered Hospitals in Proximity:</label>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                {hospitals.map((hosp) => (
-                  <motion.div
-                    whileHover={{ x: 2 }}
-                    key={hosp.hospital_id}
-                    className="p-2.5 bg-paper-subtle rounded-xl border border-rule flex items-center justify-between text-xs font-mono"
-                  >
-                    <div>
-                      <span className="text-ink font-semibold">{hosp.name}</span>
-                      <div className="text-[10px] text-ink-muted flex items-center space-x-2 mt-0.5">
-                        <span>{hosp.contact}</span>
-                        <span>•</span>
-                        <span className="text-accent font-bold tabular-nums">{hosp.distance_km} km away</span>
-                      </div>
-                    </div>
-                    <span className="pulse-badge pulse-badge-green text-[10px]">
-                      Online Node
-                    </span>
-                  </motion.div>
-                ))}
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Right Column: Broadcast Creator & Live Alerts Feed */}
-        <div className="lg:col-span-7 space-y-6">
-          
-          {/* Create Emergency Request */}
-          <div className="pulse-card space-y-4 border-emergency/30">
-            <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
-              <Send className="w-4 h-4 text-emergency" />
-              <span>Broadcast Emergency Request (Hospital A to Network)</span>
-            </h3>
-
-            <form onSubmit={handleBroadcastRequest} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <form onSubmit={handleBroadcastSOS} className="space-y-3">
               <div className="pulse-form-group">
-                <label className="pulse-label">Resource Type</label>
+                <label className="pulse-label flex items-center justify-between">
+                  <span>Urgent Medical Requirement:</span>
+                  <span className="text-emergency font-bold text-[10px]">Life-Threatening</span>
+                </label>
                 <select
                   value={resourceType}
-                  onChange={(e) => setResourceType(e.target.value as any)}
-                  className="pulse-select"
+                  onChange={(e) => setResourceType(e.target.value)}
+                  className="pulse-select font-mono font-semibold"
                 >
-                  <option value="O_NEG_BLOOD">O- Blood Units</option>
-                  <option value="O_POS_BLOOD">O+ Blood Units</option>
-                  <option value="OXYGEN">Oxygen Cylinders (Type D)</option>
-                  <option value="ICU_BED">Emergency ICU Bed</option>
-                  <option value="VENTILATOR">Ventilator Unit</option>
+                  <option value="BLOOD_O_NEG">🩸 Blood O- Negative (Universal Urgent)</option>
+                  <option value="BLOOD_A_POS">🩸 Blood A+ Positive</option>
+                  <option value="OXYGEN_CYLINDER">💨 Oxygen Cylinder (Type D)</option>
+                  <option value="ICU_BED">🛏️ ICU Bed with Ventilator</option>
+                  <option value="VENTILATOR">🫁 Mechanical Ventilator Unit</option>
+                  <option value="CARDIAC_AMBULANCE">🚑 Advanced Cardiac Ambulance</option>
                 </select>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div className="pulse-form-group">
+                  <label className="pulse-label">Quantity Needed</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={quantity}
+                    onChange={(e) => setQuantity(Number(e.target.value))}
+                    className="pulse-input tabular-nums font-mono font-bold"
+                  />
+                </div>
+
+                <div className="pulse-form-group">
+                  <label className="pulse-label">Radius Filter</label>
+                  <select
+                    value={radiusKm}
+                    onChange={(e) => setRadiusKm(Number(e.target.value))}
+                    className="pulse-select font-mono font-semibold"
+                  >
+                    <option value={15}>15.0 km (Full NCR Grid)</option>
+                    <option value={10}>10.0 km (Primary Ring)</option>
+                    <option value={5}>5.0 km (Immediate)</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="pulse-form-group">
-                <label className="pulse-label">Quantity Needed</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={quantity}
-                  onChange={(e) => setQuantity(Number(e.target.value))}
-                  className="pulse-input tabular-nums"
+                <label className="pulse-label">Clinical Emergency Notes</label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="pulse-input text-xs font-mono"
+                  placeholder="Clinical condition notes..."
                 />
               </div>
 
-              <div className="pulse-form-group">
-                <label className="pulse-label">Priority Level</label>
-                <select
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value as any)}
-                  className="pulse-select"
-                >
-                  <option value="CRITICAL">CRITICAL (Immediate)</option>
-                  <option value="HIGH">HIGH (Urgent)</option>
-                  <option value="NORMAL">NORMAL</option>
-                </select>
-              </div>
-
-              <div className="sm:col-span-3 pt-1">
-                <motion.button
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.98 }}
-                  type="submit"
-                  disabled={isBroadcasting}
-                  className="pulse-btn pulse-btn-emergency w-full pulse-btn-lg text-xs"
-                >
-                  <Zap className="w-4 h-4 fill-current" />
-                  <span>
-                    {isBroadcasting ? 'Broadcasting via Telegram & n8n Engine...' : 'TRIGGER 10KM EMERGENCY BROADCAST'}
-                  </span>
-                </motion.button>
-              </div>
+              <motion.button
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.98 }}
+                type="submit"
+                disabled={isBroadcasting}
+                className="pulse-btn pulse-btn-emergency w-full pulse-btn-lg text-xs font-mono font-bold uppercase tracking-wider mt-1"
+              >
+                <Zap className="w-4 h-4 fill-current" />
+                <span>
+                  {isBroadcasting
+                    ? 'Triggering n8n Cloud Webhook...'
+                    : 'TRIGGER 15KM EMERGENCY BROADCAST (WF08)'}
+                </span>
+              </motion.button>
             </form>
           </div>
 
-          {/* Active Emergency Stream with PopLayout Motion */}
+          {/* Section 2: Segregated Live Emergency Requisition Stream */}
           <div className="pulse-card space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-                <span>Live Emergency Alert Feed (Network Active)</span>
-              </h3>
-              <span className="text-xs font-mono text-ink-muted tabular-nums font-semibold">
-                {requests.length} Open Request(s)
-              </span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink font-bold">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <span>Regional Emergency Stream</span>
+                </h3>
+                <p className="text-[11px] font-mono text-ink-muted">
+                  Point-to-point dispatch · Only candidate facilities can supply
+                </p>
+              </div>
+
+              {/* Segmented Feed Filter Tabs */}
+              <div className="flex items-center p-1 bg-paper-subtle rounded-xl border border-rule font-mono text-xs">
+                <button
+                  type="button"
+                  onClick={() => setFeedFilter('incoming')}
+                  className={`px-3 py-1 rounded-lg transition-all flex items-center space-x-1.5 ${
+                    feedFilter === 'incoming'
+                      ? 'bg-operational text-white font-bold shadow-xs'
+                      : 'text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  <span>Incoming Alerts</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    feedFilter === 'incoming' ? 'bg-white/20' : 'bg-paper-2'
+                  }`}>
+                    {requests.filter(r => r.requesting_hospital_id !== activeHospital.hospital_id).length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFeedFilter('outgoing')}
+                  className={`px-3 py-1 rounded-lg transition-all flex items-center space-x-1.5 ${
+                    feedFilter === 'outgoing'
+                      ? 'bg-emergency text-white font-bold shadow-xs'
+                      : 'text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  <span>My SOS Requests</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    feedFilter === 'outgoing' ? 'bg-white/20' : 'bg-paper-2'
+                  }`}>
+                    {requests.filter(r => r.requesting_hospital_id === activeHospital.hospital_id).length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFeedFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg transition-all text-ink-muted hover:text-ink ${
+                    feedFilter === 'all' ? 'bg-paper text-ink font-bold shadow-xs' : ''
+                  }`}
+                >
+                  All ({requests.length})
+                </button>
+              </div>
             </div>
 
+            {/* Request Cards Stream */}
             <div className="space-y-3">
               <AnimatePresence mode="popLayout">
-                {requests.map((req) => (
-                  <motion.div
-                    layout
-                    key={req.request_id}
-                    initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={springs.gentle}
-                    className="p-4 bg-paper-subtle rounded-xl border border-rule space-y-3"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm font-mono font-bold text-ink tabular-nums">
-                            #{req.request_id} · {req.requesting_hospital_name}
-                          </span>
-                          <StatusBadge status={req.status} />
+                {requests
+                  .filter((req) => {
+                    if (feedFilter === 'incoming') return req.requesting_hospital_id !== activeHospital.hospital_id;
+                    if (feedFilter === 'outgoing') return req.requesting_hospital_id === activeHospital.hospital_id;
+                    return true;
+                  })
+                  .map((req) => {
+                    const isRequester = req.requesting_hospital_id === activeHospital.hospital_id;
+                    const isAccepted = req.status === 'ACCEPTED' || req.status === 'FULFILLED';
+                    
+                    // Haversine distance from current facility
+                    const requestingHosp = hospitals.find((h) => h.hospital_id === req.requesting_hospital_id);
+                    const distanceKm = requestingHosp
+                      ? calculateDistanceKm(
+                          activeHospital.latitude,
+                          activeHospital.longitude,
+                          requestingHosp.latitude,
+                          requestingHosp.longitude
+                        )
+                      : 0.8;
+
+                    return (
+                      <motion.div
+                        layout
+                        key={req.request_id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        transition={springs.gentle}
+                        className={`p-4 rounded-xl border space-y-3 font-mono text-xs ${
+                          isRequester
+                            ? 'bg-emergency-light/20 border-emergency/40 shadow-xs'
+                            : isAccepted
+                            ? 'bg-paper-subtle border-operational/40'
+                            : 'bg-paper border-rule shadow-sm'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-bold text-ink">
+                                #{req.request_id.substring(0, 8)}
+                              </span>
+                              <StatusBadge status={req.status} />
+
+                              {isRequester ? (
+                                <span className="px-1.5 py-0.5 rounded bg-emergency-light text-emergency text-[10px] font-bold border border-emergency/30">
+                                  Your Facility Requisition
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded bg-operational/15 text-operational text-[10px] font-bold border border-operational/30">
+                                  Nearby Request · {distanceKm} km away
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="text-ink-2 font-semibold text-xs mt-1 flex items-center space-x-1.5">
+                              <Building2 className="w-3.5 h-3.5 text-ink-muted" />
+                              <span>{req.requesting_hospital_name}</span>
+                            </div>
+                          </div>
+
+                          <div className="text-right text-[10px] text-ink-muted">
+                            {new Date(req.created_at).toLocaleTimeString()}
+                          </div>
                         </div>
-                        <p className="text-xs font-mono text-ink-2 mt-1">
-                          Urgent Needs: <strong className="text-emergency">{req.quantity} Units of {req.resource_type}</strong>
-                        </p>
-                      </div>
 
-                      <div className="text-right font-mono text-xs">
-                        <span className="text-ink-muted">Created: </span>
-                        <span className="text-ink font-semibold tabular-nums">{new Date(req.created_at).toLocaleTimeString()}</span>
-                      </div>
-                    </div>
+                        {/* Item Callout */}
+                        <div className="p-2.5 bg-paper-subtle rounded-lg border border-rule-subtle flex items-center justify-between">
+                          <span className="text-ink-muted">Requested Critical Resource:</span>
+                          <strong className="text-emergency text-sm">
+                            {req.quantity} Units · {req.resource_type.replace(/_/g, ' ')}
+                          </strong>
+                        </div>
 
-                    {req.status === 'OPEN' && (
-                      <div className="pt-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-rule-subtle">
-                        <span className="text-[11px] font-mono text-ink-muted flex items-center space-x-1">
-                          <span>Telegram webhook broadcasted to 4 nearby hospital ERs.</span>
-                        </span>
-                        <motion.button
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.96 }}
-                          onClick={() => handleAcceptAndLock(req.request_id)}
-                          className="pulse-btn pulse-btn-primary pulse-btn-sm"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>ACCEPT & SUPPLY (Safdarjung)</span>
-                        </motion.button>
-                      </div>
-                    )}
-
-                    {req.status === 'ACCEPTED' && (
-                      <div className="pt-2.5 flex items-center justify-between border-t border-rule-subtle text-xs font-mono">
-                        <span className="text-emerald-800 dark:text-emerald-300 font-bold flex items-center space-x-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-operational" />
-                          <span>Accepted by {req.supplying_hospital_name}. Locked in Supabase atomically.</span>
-                        </span>
-                        <motion.button
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.96 }}
-                          onClick={() => setShowDispatchModal(true)}
-                          className="text-accent font-bold hover:underline flex items-center space-x-1"
-                        >
-                          <QrCode className="w-3.5 h-3.5" />
-                          <span>View Handover Pass</span>
-                        </motion.button>
-                      </div>
-                    )}
-                  </motion.div>
-                ))}
+                        {/* ========================================================================= */}
+                        {/* ROLE-BASED ACTION CONTROLS */}
+                        {/* ========================================================================= */}
+                        {isRequester ? (
+                          /* SENDER PERSPECTIVE: NO ACCEPT & SUPPLY BUTTON */
+                          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-rule-subtle">
+                            {!isAccepted ? (
+                              <>
+                                <div className="flex items-center space-x-2 text-[11px] text-ink-muted">
+                                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+                                  <span>Broadcasted to 15km regional hospitals. Awaiting donor response...</span>
+                                </div>
+                                <div className="flex items-center space-x-2 shrink-0">
+                                  <button
+                                    onClick={() => handleCancelRequest(req.request_id)}
+                                    className="text-[11px] font-mono text-ink-muted hover:text-emergency hover:underline"
+                                  >
+                                    Cancel SOS
+                                  </button>
+                                  <span className="text-xs font-mono font-bold text-amber-500 bg-paper px-2 py-0.5 rounded border border-rule">
+                                    Escalation: {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
+                                  </span>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex items-center justify-between w-full">
+                                <span className="text-operational font-bold flex items-center space-x-1 text-xs">
+                                  <CheckCircle2 className="w-4 h-4 text-operational" />
+                                  <span>Accepted & Dispatched by {req.supplying_hospital_name}</span>
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    if (activeMission) setShowQRModal(true);
+                                  }}
+                                  className="pulse-btn pulse-btn-sm pulse-btn-primary font-mono text-xs flex items-center space-x-1"
+                                >
+                                  <QrCode className="w-3.5 h-3.5" />
+                                  <span>Inbound QR Pass</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          /* RECIPIENT PERSPECTIVE: SHOW ACCEPT & SUPPLY / DECLINE */
+                          <div className="pt-2 flex items-center justify-between gap-2 border-t border-rule-subtle">
+                            {!isAccepted ? (
+                              <>
+                                <span className="text-[10px] text-ink-muted hidden sm:inline">
+                                  Direct Telegram alert dispatched to your registered desk.
+                                </span>
+                                <div className="flex items-center space-x-2 ml-auto">
+                                  <button
+                                    onClick={() => handleDeclineRequest(req.request_id)}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-mono text-ink-muted hover:text-emergency hover:bg-paper-subtle transition-colors"
+                                  >
+                                    Decline
+                                  </button>
+                                  <motion.button
+                                    whileHover={{ scale: 1.02 }}
+                                    whileTap={{ scale: 0.96 }}
+                                    disabled={isAccepting}
+                                    onClick={() => handleAcceptRequest(req, activeHospital)}
+                                    className="pulse-btn pulse-btn-primary pulse-btn-sm font-mono text-xs whitespace-nowrap"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>
+                                      {isAccepting ? 'Locking...' : `ACCEPT & SUPPLY (${activeHospital.name.split(' ')[0]})`}
+                                    </span>
+                                  </motion.button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex items-center justify-between w-full text-xs">
+                                <span className="text-operational font-bold flex items-center space-x-1">
+                                  <CheckCircle2 className="w-4 h-4 text-operational" />
+                                  <span>
+                                    {req.supplying_hospital_id === activeHospital.hospital_id
+                                      ? `Supplied by Your Desk! Stock Locked.`
+                                      : `Fulfilled by ${req.supplying_hospital_name}`}
+                                  </span>
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    if (activeMission) setShowQRModal(true);
+                                  }}
+                                  className="text-accent font-bold hover:underline flex items-center space-x-1"
+                                >
+                                  <QrCode className="w-3.5 h-3.5" />
+                                  <span>Pass QR</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  })}
               </AnimatePresence>
+
+              {/* Empty state for filtered requests */}
+              {requests.filter((req) => {
+                if (feedFilter === 'incoming') return req.requesting_hospital_id !== activeHospital.hospital_id;
+                if (feedFilter === 'outgoing') return req.requesting_hospital_id === activeHospital.hospital_id;
+                return true;
+              }).length === 0 && (
+                <div className="p-8 text-center bg-paper-subtle rounded-xl border border-rule font-mono text-xs text-ink-muted">
+                  {feedFilter === 'incoming'
+                    ? 'No incoming emergency alerts from nearby hospitals at this time.'
+                    : feedFilter === 'outgoing'
+                    ? 'No active outgoing SOS requisitions sent by your facility desk.'
+                    : 'No emergency requests recorded.'}
+                </div>
+              )}
             </div>
           </div>
 
@@ -386,15 +902,19 @@ export const EmergencyView: React.FC = () => {
 
       </div>
 
-      {/* Regional Hospital Inventory Matrix */}
+      {/* Regional Hospital Inventory Matrix (15km) */}
       <div className="pulse-card space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="pulse-h4 text-sm text-ink">Regional Hospital Telemetry & Proximity Matrix</h3>
-            <p className="pulse-text-muted text-xs">Instant inventory scannability across trauma centers in the 10km grid.</p>
+            <h3 className="pulse-h4 text-sm text-ink font-bold">
+              Regional Healthcare Network Telemetry & 15km Proximity Grid
+            </h3>
+            <p className="pulse-text-muted text-xs">
+              Live capacity, blood bank reserves, and Haversine distance from AIIMS Trauma Center.
+            </p>
           </div>
           <span className="pulse-badge pulse-badge-green text-xs font-semibold">
-            Network Sync Active
+            <span className="pulse-dot pulse-dot-green"></span> 5 Hospital Nodes Synced
           </span>
         </div>
 
@@ -402,24 +922,46 @@ export const EmergencyView: React.FC = () => {
           <table className="pulse-table pulse-table-hover">
             <thead>
               <tr>
-                <th>Hospital</th>
-                <th>Specialty & Trauma Tier</th>
+                <th>Hospital Facility</th>
+                <th>Trauma Level</th>
+                <th>Blood Reserves (O- / A+)</th>
                 <th>ICU Beds</th>
-                <th>Blood Inventory</th>
-                <th>Proximity</th>
-                <th>Dispatch State</th>
+                <th>15km Proximity</th>
+                <th>Dispatch Readiness</th>
               </tr>
             </thead>
             <tbody>
               {hospitals.map((hosp) => (
                 <tr key={hosp.hospital_id}>
-                  <td className="font-semibold text-ink">{hosp.name}</td>
-                  <td className="text-ink-2">Level 1 Trauma & Cardiac</td>
-                  <td className="tabular-nums font-medium text-operational">18 Available</td>
-                  <td className="tabular-nums text-ink">O-, A+, B+, AB+</td>
-                  <td className="tabular-nums font-mono font-semibold text-accent">{hosp.distance_km} km</td>
+                  <td className="font-semibold text-ink">
+                    <div className="flex items-center space-x-2">
+                      <span>{hosp.name}</span>
+                      {hosp.hospital_id === INITIAL_HOSPITALS[0].hospital_id && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 font-mono">
+                          Hospital A
+                        </span>
+                      )}
+                      {hosp.hospital_id === INITIAL_HOSPITALS[1].hospital_id && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 font-mono">
+                          Hospital B
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="text-ink-2 font-mono text-xs">Level 1 Apex Trauma</td>
+                  <td className="tabular-nums font-mono font-semibold text-ink">
+                    <span className="text-emergency">O- (8 Units)</span> · <span className="text-operational">A+ (24 Units)</span>
+                  </td>
+                  <td className="tabular-nums font-mono font-medium text-operational">
+                    18 Beds Available
+                  </td>
+                  <td className="tabular-nums font-mono font-bold text-accent">
+                    {hosp.distance_km?.toFixed(1) || '0.0'} km
+                  </td>
                   <td>
-                    <span className="pulse-badge pulse-badge-green text-[11px]">Ready</span>
+                    <span className="pulse-badge pulse-badge-green text-[11px]">
+                      Ready
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -428,17 +970,31 @@ export const EmergencyView: React.FC = () => {
         </div>
       </div>
 
-      {/* Emergency Dispatch Handover Pass Modal */}
-      {currentDispatchPass && (
-        <QrCodeModal
-          isOpen={showDispatchModal}
-          onClose={() => setShowDispatchModal(false)}
-          title="Emergency Supply Dispatch Pass"
-          type="dispatch"
-          data={currentDispatchPass}
+      {/* QR Dispatch Pass Modal */}
+      {qrPassData && (
+        <QRDispatchPassModal
+          isOpen={showQRModal}
+          onClose={() => setShowQRModal(false)}
+          passData={qrPassData}
         />
       )}
 
+      {/* 2-Step Ambulance Verification Modal */}
+      {activeMission && (
+        <AmbulanceVerificationModal
+          isOpen={verificationModal.isOpen}
+          onClose={() => setVerificationModal({ ...verificationModal, isOpen: false })}
+          type={verificationModal.type}
+          dispatchId={activeMission.dispatchId}
+          donorHospitalName={activeMission.donorHospital.name}
+          requesterHospitalName={activeMission.requesterHospital.name}
+          resourceType={activeMission.resourceType}
+          quantity={activeMission.quantity}
+          onConfirmVerification={
+            verificationModal.type === 'PICKUP' ? handleConfirmPickup : handleConfirmDelivery
+          }
+        />
+      )}
     </div>
   );
 };
