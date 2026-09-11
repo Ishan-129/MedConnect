@@ -170,8 +170,9 @@ export async function processReceptionistTurn(input) {
 
 async function processReceptionistTurnRaw(input) {
   const allHospitals = await db.getHospitals();
-  const defaultHospital = allHospitals.find(h => h.id === '11111111-1111-4111-a111-111111111111') || allHospitals.find(h => h.name.includes('AIIMS')) || allHospitals[0];
-  let hospitalId = input.hospitalId || defaultHospital?.id || defaultHospital?.hospital_id || '11111111-1111-4111-a111-111111111111';
+  const currentHospital = (input.hospitalId ? allHospitals.find(h => h.id === input.hospitalId || h.hospital_id === input.hospitalId) : null) || allHospitals[0];
+  let hospitalId = input.hospitalId || currentHospital?.id || currentHospital?.hospital_id || '';
+  const hospDisplayName = currentHospital?.name || 'MedConnect Hospital';
 
   let doctors = await db.getDoctors(hospitalId);
   if (!doctors || doctors.length === 0) {
@@ -179,7 +180,7 @@ async function processReceptionistTurnRaw(input) {
   }
   let departments = await db.getDepartments(hospitalId);
   if (!departments || departments.length === 0) {
-    departments = await db.getDepartments('11111111-1111-4111-a111-111111111111');
+    departments = await db.getDepartments();
   }
 
   const findDocMatch = (nameStr) => {
@@ -1131,10 +1132,10 @@ async function processReceptionistTurnRaw(input) {
       const isHindi = input.language === 'Hindi';
       const isEnglish = input.language === 'English';
       const msg = isHindi
-        ? 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आज मैं आपकी क्या सहायता कर सकता हूँ? आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं, डॉक्टरों की उपलब्धता जान सकते हैं, या अपनी टोकन कतार स्थिति देख सकते हैं।'
+        ? `नमस्ते! ${hospDisplayName} के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आज मैं आपकी क्या सहायता कर सकता हूँ? आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं, डॉक्टरों की उपलब्धता जान सकते हैं, या अपनी टोकन कतार स्थिति देख सकते हैं।`
         : isEnglish
-        ? 'Hello! Welcome to MedConnect AI Receptionist at Yashoda Hospital. How may I assist you today? I can help you book an appointment, check doctor availability, track your queue token, or handle emergency requests.'
-        : 'Namaste! Yashoda Hospital ke MedConnect AI Receptionist me aapka swagat hai. Main aapki appointment booking, doctor availability, queue status check, ya hospital queries me help kar sakta hoon. Aap kaise sahayata chahte hain?';
+        ? `Hello! Welcome to MedConnect AI Receptionist at ${hospDisplayName}. How may I assist you today? I can help you book an appointment, check doctor availability, track your queue token, or handle emergency requests.`
+        : `Namaste! ${hospDisplayName} ke MedConnect AI Receptionist me aapka swagat hai. Main aapki appointment booking, doctor availability, queue status check, ya hospital queries me help kar sakta hoon. Aap kaise sahayata chahte hain?`;
 
       return {
         success: true,
@@ -1158,11 +1159,15 @@ async function processReceptionistTurnRaw(input) {
     case 'CAPABILITIES_QUERY': {
       const isHindi = input.language === 'Hindi';
       const isEnglish = input.language === 'English';
+      const deptListStr = departments && departments.length > 0
+        ? departments.map(d => d.name).slice(0, 4).join(', ')
+        : 'General OPD';
+
       const msg = isHindi
-        ? 'मैं यशोदा हॉस्पिटल का मेडकनेक्ट एआई रिसेप्शनिस्ट हूँ। मैं आपकी इन सेवाओं में सहायता कर सकता हूँ:\n1. 🩺 विशेषज्ञ डॉक्टरों के साथ अपॉइंटमेंट बुक करना (कार्डियोलॉजी, ऑर्थोपेडिक्स, जनरल मेडिसिन, पीडियाट्रिक्स)।\n2. ⏱️ डॉक्टरों की उपलब्धता और समय स्लॉट देखना।\n3. 🔢 अपनी लाइव ओपीडी कतार संख्या और प्रतीक्षा समय जांचना।\n4. 💳 परामर्श शुल्क और बकाया राशि की जानकारी प्राप्त करना।\n5. 🚨 आपातकालीन संसाधन (ऑक्सीजन, आईसीयू बेड, रक्त, एम्बुलेंस) अनुरोध दर्ज करना।\n\nआज मैं आपकी क्या सहायता कर सकता हूँ?'
+        ? `मैं ${hospDisplayName} का मेडकनेक्ट एआई रिसेप्शनिस्ट हूँ। मैं आपकी इन सेवाओं में सहायता कर सकता हूँ:\n1. 🩺 विशेषज्ञ डॉक्टरों के साथ अपॉइंटमेंट बुक करना (${deptListStr})।\n2. ⏱️ डॉक्टरों की उपलब्धता और समय स्लॉट देखना।\n3. 🔢 अपनी लाइव ओपीडी कतार संख्या और प्रतीक्षा समय जांचना।\n4. 💳 परामर्श शुल्क और बकाया राशि की जानकारी प्राप्त करना।\n5. 🚨 आपातकालीन संसाधन (ऑक्सीजन, आईसीयू बेड, रक्त, एम्बुलेंस) अनुरोध दर्ज करना।\n\nआज मैं आपकी क्या सहायता कर सकता हूँ?`
         : isEnglish
-        ? 'I am MedConnect\'s AI Receptionist for Yashoda Hospital. Here is how I can assist you:\n1. 🩺 Book appointments with specialist doctors (Cardiology, Orthopedics, General Medicine, Pediatrics).\n2. ⏱️ Check real-time doctor availability and open slots.\n3. 🔢 Track your live OPD queue token position and estimated wait time.\n4. 💳 Check consultation fees and pending dues.\n5. 🚨 Dispatch emergency resource requests (Oxygen, ICU beds, Blood, Ambulances).\n\nHow may I help you today?'
-        : 'Main Yashoda Hospital ka MedConnect AI Receptionist hoon. Main aapki in cheezon me help kar sakta hoon:\n1. 🩺 Specialists ke sath appointment book karna.\n2. ⏱️ Doctor availability aur open time slots check karna.\n3. 🔢 Live OPD queue token aur wait time dekhna.\n4. 💳 Consultation fee aur pending dues check karna.\n5. 🚨 Emergency resources (Oxygen, ICU beds, Blood, Ambulance) request karna.\n\nAapko kis service me help chahiye?';
+        ? `I am MedConnect's AI Receptionist for ${hospDisplayName}. Here is how I can assist you:\n1. 🩺 Book appointments with specialist doctors (${deptListStr}).\n2. ⏱️ Check real-time doctor availability and open slots.\n3. 🔢 Track your live OPD queue token position and estimated wait time.\n4. 💳 Check consultation fees and pending dues.\n5. 🚨 Dispatch emergency resource requests (Oxygen, ICU beds, Blood, Ambulances).\n\nHow may I help you today?`
+        : `Main ${hospDisplayName} ka MedConnect AI Receptionist hoon. Main aapki in cheezon me help kar sakta hoon:\n1. 🩺 Specialists (${deptListStr}) ke sath appointment book karna.\n2. ⏱️ Doctor availability aur open time slots check karna.\n3. 🔢 Live OPD queue token aur wait time dekhna.\n4. 💳 Consultation fee aur pending dues check karna.\n5. 🚨 Emergency resources (Oxygen, ICU beds, Blood, Ambulance) request karna.\n\nAapko kis service me help chahiye?`;
 
       return {
         success: true,
@@ -1187,10 +1192,10 @@ async function processReceptionistTurnRaw(input) {
       const isHindi = input.language === 'Hindi';
       const isEnglish = input.language === 'English';
       const msg = isHindi
-        ? `आपने कहा: "${transcriptText}"। मैं यशोदा हॉस्पिटल का एआई रिसेप्शनिस्ट हूँ। आप मुझसे डॉक्टर अपॉइंटमेंट बुक करने, डॉक्टरों की उपलब्धता जांचने, कतार स्थिति देखने, या अस्पताल संबंधी प्रश्न पूछने के लिए कह सकते हैं। आज मैं आपकी क्या सहायता करूँ?`
+        ? `आपने कहा: "${transcriptText}"। मैं ${hospDisplayName} का एआई रिसेप्शनिस्ट हूँ। आप मुझसे डॉक्टर अपॉइंटमेंट बुक करने, डॉक्टरों की उपलब्धता जांचने, कतार स्थिति देखने, या अस्पताल संबंधी प्रश्न पूछने के लिए कह सकते हैं। आज मैं आपकी क्या सहायता करूँ?`
         : isEnglish
-        ? `You said: "${transcriptText}". I am MedConnect AI Receptionist for Yashoda Hospital. You can ask me to book a doctor appointment, check doctor schedules, track your queue token, or inquire about hospital facilities. How can I assist you with this?`
-        : `Aapne kaha: "${transcriptText}". Main Yashoda Hospital ka AI Receptionist hoon. Aap mujhse doctor appointment book karne, doctor availability check karne, token queue dekhne, ya hospital ki details lene ke liye keh sakte hain. Aap kya karna chahenge?`;
+        ? `You said: "${transcriptText}". I am MedConnect AI Receptionist for ${hospDisplayName}. You can ask me to book a doctor appointment, check doctor schedules, track your queue token, or inquire about hospital facilities. How can I assist you with this?`
+        : `Aapne kaha: "${transcriptText}". Main ${hospDisplayName} ka AI Receptionist hoon. Aap mujhse doctor appointment book karne, doctor availability check karne, token queue dekhne, ya hospital ki details lene ke liye keh sakte hain. Aap kya karna chahenge?`;
 
       return {
         success: true,

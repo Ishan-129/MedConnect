@@ -35,19 +35,6 @@ import { springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
 import { calculateDistanceKm } from '../lib/haversine';
 
-const AIIMS_COORDS = { lat: 28.5672, lng: 77.2100 };
-const DEFAULT_FALLBACK_HOSPITAL: Hospital = {
-  hospital_id: '11111111-1111-4111-a111-111111111111',
-  name: 'All India Institute of Medical Sciences (AIIMS) New Delhi',
-  latitude: 28.5672,
-  longitude: 77.21,
-  contact: '+91-11-26588500',
-  telegram_chat_id: '6537122486',
-  active_status: true,
-  supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
-  distance_km: 0,
-};
-
 export const EmergencyView: React.FC = () => {
   const { activeHospital: authHospital, allHospitals, switchHospital, openAuthModal } = useAuth();
 
@@ -68,8 +55,8 @@ export const EmergencyView: React.FC = () => {
     }));
   }, [allHospitals, authHospital]);
 
-  // Active viewing hospital (defaults to logged-in facility or first hospital)
-  const activeHospital: Hospital = useMemo(() => {
+  // Active viewing hospital (defaults to logged-in facility or first hospital from database)
+  const activeHospital: Hospital | null = useMemo(() => {
     if (authHospital) {
       return {
         hospital_id: authHospital.hospital_id,
@@ -83,7 +70,7 @@ export const EmergencyView: React.FC = () => {
         distance_km: 0,
       };
     }
-    return hospitals[0] || DEFAULT_FALLBACK_HOSPITAL;
+    return hospitals[0] || null;
   }, [authHospital, hospitals]);
 
   // Feed tabs: 'incoming' (alerts from other hospitals), 'outgoing' (sent by you), 'all'
@@ -492,6 +479,15 @@ export const EmergencyView: React.FC = () => {
       prev.map((r) => (r.request_id === requestId ? { ...r, status: 'CANCELLED' as any } : r))
     );
   };
+
+  if (!activeHospital) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4 animate-fade-in">
+        <div className="w-8 h-8 border-2 border-emergency border-t-transparent rounded-full animate-spin" />
+        <p className="font-mono text-xs text-ink-muted">Connecting to hospital network database...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-fade-in-up">

@@ -14,7 +14,7 @@ interface QueueViewProps {
 }
 
 export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception', hideRoleSwitcher = false }) => {
-  const { activePatient, activeHospital, openAuthModal, getAuthHeader } = useAuth();
+  const { activePatient, activeHospital, allHospitals, openAuthModal, getAuthHeader } = useAuth();
   const [roleView, setRoleView] = useState<'patient' | 'reception' | 'doctor'>(defaultRole);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [queueLoading, setQueueLoading] = useState(true);
@@ -34,12 +34,13 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
   const [isSearchingToken, setIsSearchingToken] = useState(false);
   const [tokenSearchError, setTokenSearchError] = useState<string | null>(null);
 
-  const hospitalId = activeHospital?.hospital_id || '11111111-1111-4111-a111-111111111111';
+  const hospitalId = activeHospital?.hospital_id || allHospitals[0]?.hospital_id || '';
 
   // Fetch live queue from backend
   const fetchQueue = useCallback(async () => {
     try {
-      const res = await fetch(`/api/queue/entries?hospitalId=${hospitalId}`);
+      const url = hospitalId ? `/api/queue/entries?hospitalId=${hospitalId}` : '/api/queue/entries';
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         const entries: QueueEntry[] = data.entries || [];
@@ -124,8 +125,14 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
 
   // Phase 7: Automatically resolve patient active appointment from real database upon login/mount
   useEffect(() => {
-    if (activePatient?.patient_id) {
-      fetch(`/api/appointments?patientId=${encodeURIComponent(activePatient.patient_id)}`)
+    if (activePatient?.patient_id || activePatient?.phone) {
+      const params = new URLSearchParams();
+      if (activePatient.patient_id) params.set('patientId', activePatient.patient_id);
+      if (activePatient.phone) params.set('phone', activePatient.phone);
+
+      fetch(`/api/appointments?${params.toString()}`, {
+        headers: { ...getAuthHeader() },
+      })
         .then(res => res.json())
         .then(data => {
           if (data.appointments && data.appointments.length > 0) {
@@ -138,11 +145,18 @@ export const QueueView: React.FC<QueueViewProps> = ({ defaultRole = 'reception',
               setTrackedToken(tok);
               fetchTokenStatus(tok);
             }
+          } else {
+            // Patient has no appointments: clear any previous user's token
+            setTrackedToken('');
+            setTrackedStatusData(null);
           }
         })
         .catch(err => console.warn('[QueueView] Auto-resolve appointment error:', err));
+    } else if (!activePatient) {
+      setTrackedToken('');
+      setTrackedStatusData(null);
     }
-  }, [activePatient?.patient_id, fetchTokenStatus, trackedToken]);
+  }, [activePatient?.patient_id, activePatient?.phone, fetchTokenStatus, getAuthHeader]);
 
   const [checkInToken, setCheckInToken] = useState('');
   const [checkInMsg, setCheckInMsg] = useState<{ text: string; error?: boolean } | null>(null);

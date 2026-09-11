@@ -443,7 +443,28 @@ class InMemoryDatabase {
     let res = [...this.appointments];
     if (filter.hospital_id) res = res.filter(a => !a.hospital_id || a.hospital_id === filter.hospital_id);
     if (filter.doctor_id) res = res.filter(a => a.doctor_id === filter.doctor_id);
-    if (filter.patient_id) res = res.filter(a => a.patient_id === filter.patient_id);
+    const targetPatientId = filter.patient_id || filter.patientId;
+    const targetPhone = filter.phone || filter.patientPhone;
+    if (targetPatientId || targetPhone) {
+      const allowedIds = new Set();
+      if (targetPatientId) allowedIds.add(targetPatientId);
+      if (targetPhone) {
+        const pt = this.getPatientByPhone(targetPhone);
+        if (pt) {
+          if (pt.id) allowedIds.add(pt.id);
+          if (pt.patient_id) allowedIds.add(pt.patient_id);
+        }
+      }
+      const cleanPhone = targetPhone ? targetPhone.replace(/[\s\-]/g, '') : null;
+      res = res.filter(a => {
+        if (allowedIds.has(a.patient_id)) return true;
+        if (cleanPhone && a.patient_phone) {
+          const aClean = a.patient_phone.replace(/[\s\-]/g, '');
+          if (aClean === cleanPhone || (cleanPhone.length >= 10 && aClean.endsWith(cleanPhone.slice(-10)))) return true;
+        }
+        return false;
+      });
+    }
     if (filter.status) res = res.filter(a => a.status === filter.status);
     return res;
   }
@@ -1248,14 +1269,35 @@ export const db = {
   async getAppointments(filter = {}) {
     if (supabase) {
       try {
-        let q = supabase.from('appointments').select('*, doctors(name, hospital_id, specialization, room_number), departments(name), hospitals(name), slots(slot_date, start_time)');
+        let q = supabase.from('appointments').select('*, doctors(name, hospital_id, specialization, room_number), departments(name), hospitals(name), slots(slot_date, start_time), patients(*)');
         if (filter.hospital_id || filter.hospitalId) q = q.eq('hospital_id', filter.hospital_id || filter.hospitalId);
         if (filter.doctor_id || filter.doctorId) q = q.eq('doctor_id', filter.doctor_id || filter.doctorId);
-        if (filter.patient_id || filter.patientId) q = q.eq('patient_id', filter.patient_id || filter.patientId);
-        if (filter.phone) {
-          const pt = await this.getPatientByPhone(filter.phone);
-          if (pt) q = q.eq('patient_id', pt.id || pt.patient_id);
+
+        const targetPatientId = filter.patient_id || filter.patientId;
+        const targetPhone = filter.phone || filter.patientPhone;
+
+        if (targetPatientId || targetPhone) {
+          const matchingIds = new Set();
+          if (targetPatientId) matchingIds.add(targetPatientId);
+          if (targetPhone) {
+            const pt = await this.getPatientByPhone(targetPhone);
+            if (pt) {
+              if (pt.id) matchingIds.add(pt.id);
+              if (pt.patient_id) matchingIds.add(pt.patient_id);
+            }
+          }
+          if (matchingIds.size === 0) {
+            // Patient filter was specified, but no corresponding patient record exists
+            return [];
+          }
+          const idList = Array.from(matchingIds);
+          if (idList.length === 1) {
+            q = q.eq('patient_id', idList[0]);
+          } else {
+            q = q.in('patient_id', idList);
+          }
         }
+
         if (filter.status) q = q.eq('status', filter.status.toLowerCase());
         const { data, error } = await q.order('created_at', { ascending: false });
         if (!error && data) {
@@ -1979,7 +2021,7 @@ export const db = {
     // 2. Validate against live database
     if (supabase) {
       try {
-        let query = supabase.from('appointments').select('*, doctors(name, hospital_id, departments(name)), departments(name), patients(full_name, phone_number), slots(slot_date, start_time)');
+        let query = supabase.from('appointments').select('*, doctors(name, hospital_id, departments(name)), departments(name), hospitals(name), patients(full_name, phone_number), slots(slot_date, start_time)');
         if (resolvedAppointmentId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(resolvedAppointmentId)) {
           query = query.eq('id', resolvedAppointmentId);
         } else if (resolvedToken) {
@@ -1991,7 +2033,7 @@ export const db = {
           const apptStatus = (appt.status || 'BOOKED').toUpperCase();
           const docName = appt.doctors?.name || 'Assigned Doctor';
           const deptName = appt.departments?.name || appt.doctors?.departments?.name || 'General OPD';
-          const hospName = 'All India Institute of Medical Sciences (AIIMS) New Delhi';
+          const hospName = appt.hospitals?.name || (appt.hospital_id ? (await db.getHospitalById(appt.hospital_id))?.name : '') || 'Hospital';
           const patName = appt.patients?.full_name || appt.patients?.name || 'Patient';
           const patPhone = appt.patients?.phone_number || appt.patients?.phone || '';
 

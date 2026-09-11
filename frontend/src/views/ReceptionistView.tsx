@@ -43,8 +43,16 @@ import {
 } from '../services/receptionistService';
 import type { Doctor } from '../types';
 
+// Helper to format local date as YYYY-MM-DD (avoids UTC timezone shift issues)
+export const getLocalIsoDate = (d = new Date()): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const ReceptionistView: React.FC = () => {
-  const { activePatient, activeHospital, openAuthModal, getAuthHeader } = useAuth();
+  const { activePatient, activeHospital, allHospitals, openAuthModal, getAuthHeader } = useAuth();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -52,10 +60,10 @@ export const ReceptionistView: React.FC = () => {
   const [selectedLanguage, setSelectedLanguage] = useState<'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN'>('hi-IN');
   const [transcript, setTranscript] = useState('');
   const [patientName, setPatientName] = useState<string>(
-    () => activePatient?.name || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_name') : null) || 'Patient'
+    () => activePatient?.name || ''
   );
   const [patientPhone, setPatientPhone] = useState<string>(
-    () => activePatient?.phone || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_phone') : null) || '+91 98999 12345'
+    () => activePatient?.phone || ''
   );
   const [suggestedActions, setSuggestedActions] = useState<{ label: string; text: string }[]>([]);
 
@@ -70,10 +78,14 @@ export const ReceptionistView: React.FC = () => {
         setPatientPhone(activePatient.phone);
         try { localStorage.setItem('medconnect_patient_phone', activePatient.phone); } catch {}
       }
+    } else {
+      setPatientName('');
+      setPatientPhone('');
+      setMyAppointments([]);
     }
   }, [activePatient]);
   const [aiSpeechMessage, setAiSpeechMessage] = useState<string>(
-    'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।'
+    'नमस्ते! मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।'
   );
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContext>({});
@@ -87,7 +99,7 @@ export const ReceptionistView: React.FC = () => {
   const [loadingSlots, setLoadingSlots] = useState(false);
 
   // Date and slot selection state
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => getLocalIsoDate());
   const [selectedSlotId, setSelectedSlotId] = useState('');
   interface SlotItem {
     slot_id: string;
@@ -108,7 +120,7 @@ export const ReceptionistView: React.FC = () => {
   });
 
   const [symptoms, setSymptoms] = useState('');
-  const [selectedDepartment, setSelectedDepartment] = useState('Cardiology');
+  const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [selectedSlot, setSelectedSlot] = useState('');
   const [isBooking, setIsBooking] = useState(false);
@@ -163,8 +175,8 @@ export const ReceptionistView: React.FC = () => {
     return String(val || '');
   };
 
-  // Resolve hospital ID: prefer live activeHospital, fall back to known AIIMS New Delhi seed ID
-  const hospitalId = activeHospital?.hospital_id || '11111111-1111-4111-a111-111111111111';
+  // Resolve hospital ID: prefer live activeHospital, fall back to first database hospital
+  const hospitalId = activeHospital?.hospital_id || allHospitals[0]?.hospital_id || '';
 
   // Format date helper
   const formatDisplayDate = useCallback((dateStr: string) => {
@@ -177,13 +189,13 @@ export const ReceptionistView: React.FC = () => {
     }
   }, []);
 
-  // Generate upcoming 7 days for quick date chips
+  // Generate upcoming 7 days for quick date chips using local calendar dates
   const upcomingDates = useMemo(() => {
     const dates = [];
     const base = new Date();
     for (let i = 0; i < 7; i++) {
-      const d = new Date(base.getTime() + i * 86400000);
-      const iso = d.toISOString().split('T')[0];
+      const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+      const iso = getLocalIsoDate(d);
       const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' });
       const subLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       dates.push({ iso, label, subLabel, isToday: i === 0 });
@@ -191,13 +203,7 @@ export const ReceptionistView: React.FC = () => {
     return dates;
   }, []);
 
-  // Keep patient fields synced with AuthContext active patient
-  useEffect(() => {
-    if (activePatient) {
-      setPatientName(activePatient.name);
-      setPatientPhone(activePatient.phone);
-    }
-  }, [activePatient]);
+
 
   // ---------------------------------------------------------------
   // LOAD REAL DEPARTMENTS FROM BACKEND
@@ -234,13 +240,11 @@ export const ReceptionistView: React.FC = () => {
   // ---------------------------------------------------------------
   // LOAD REAL DOCTORS FROM BACKEND
   // ---------------------------------------------------------------
-  const fetchDoctors = useCallback(async (department: string) => {
+  const fetchDoctors = useCallback(async (targetDepartment?: string) => {
     setLoadingDoctors(true);
     try {
-      // Map department display name → encoded query param
       const params = new URLSearchParams();
       if (hospitalId) params.set('hospitalId', hospitalId);
-      if (department) params.set('departmentName', department);
 
       let res = await fetch(`/api/doctors?${params.toString()}`);
       let fetched: Doctor[] = [];
@@ -251,13 +255,6 @@ export const ReceptionistView: React.FC = () => {
 
       // If specific hospital/department filter returned 0, fallback to general doctors
       if (fetched.length === 0) {
-        const allRes = await fetch(`/api/doctors?departmentName=${encodeURIComponent(department)}`);
-        if (allRes.ok) {
-          const allData = await allRes.json();
-          fetched = allData.doctors || [];
-        }
-      }
-      if (fetched.length === 0) {
         const allRes = await fetch('/api/doctors');
         if (allRes.ok) {
           const allData = await allRes.json();
@@ -267,10 +264,11 @@ export const ReceptionistView: React.FC = () => {
 
       setDoctors(fetched);
       // Auto-select first doctor in department if available
+      const dept = targetDepartment || selectedDepartment;
       const deptDoctors = fetched.filter(d =>
-        !department ||
-        d.department_name?.toLowerCase().includes(department.toLowerCase()) ||
-        d.specialization?.toLowerCase().includes(department.toLowerCase())
+        !dept ||
+        d.department_name?.toLowerCase().includes(dept.toLowerCase()) ||
+        d.specialization?.toLowerCase().includes(dept.toLowerCase())
       );
       const first = deptDoctors[0] || fetched[0];
       if (first) {
@@ -281,7 +279,7 @@ export const ReceptionistView: React.FC = () => {
     } finally {
       setLoadingDoctors(false);
     }
-  }, [hospitalId]);
+  }, [hospitalId, selectedDepartment]);
 
   // ---------------------------------------------------------------
   // LOAD REAL AVAILABLE & DETAILED SLOTS FROM BACKEND
@@ -362,23 +360,62 @@ export const ReceptionistView: React.FC = () => {
     }
   }, [selectedDate]);
 
-  // Load patient's confirmed appointments directly from real database
-  const fetchMyAppointments = useCallback(async () => {
-    const targetPatientId = activePatient?.patient_id;
-    const targetPhone = activePatient?.phone || patientPhone || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_phone') : null);
-    const targetToken = typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_token') : null;
+  // Synchronous selection handlers ensuring immediate UI & slot state sync
+  const handleSelectDepartment = useCallback((dept: string) => {
+    setSelectedDepartment(dept);
+    setSelectedSlot('');
+    setSelectedSlotId('');
+    const match = doctors.filter(d =>
+      (d.department_name && d.department_name.toLowerCase().includes(dept.toLowerCase())) ||
+      (d.specialization && d.specialization.toLowerCase().includes(dept.toLowerCase()))
+    );
+    const targetDoc = match[0] || doctors[0];
+    if (targetDoc) {
+      setSelectedDoctorId(targetDoc.doctor_id);
+      fetchSlots(targetDoc.doctor_id, selectedDate);
+    } else {
+      setSelectedDoctorId('');
+      setDetailedSlots([]);
+      setAvailableSlots([]);
+      setSlotCounts({ available: 0, booked: 0, total: 0 });
+    }
+  }, [doctors, selectedDate, fetchSlots]);
 
-    if (!targetPatientId && !targetPhone && !targetToken) {
+  const handleSelectDoctor = useCallback((docId: string) => {
+    setSelectedDoctorId(docId);
+    setSelectedSlot('');
+    setSelectedSlotId('');
+    fetchSlots(docId, selectedDate);
+  }, [selectedDate, fetchSlots]);
+
+  const handleSelectDate = useCallback((dateStr: string) => {
+    setSelectedDate(dateStr);
+    setSelectedSlot('');
+    setSelectedSlotId('');
+    if (selectedDoctorId) {
+      fetchSlots(selectedDoctorId, dateStr);
+    }
+  }, [selectedDoctorId, fetchSlots]);
+
+  // Load patient's confirmed appointments directly from real database (only for logged-in patients)
+  const fetchMyAppointments = useCallback(async () => {
+    if (!activePatient) {
       setMyAppointments([]);
       return;
     }
+
+    const targetPatientId = activePatient.patient_id;
+    const targetPhone = activePatient.phone;
+
     setLoadingMyAppointments(true);
     try {
       const params = new URLSearchParams();
       if (targetPatientId) params.set('patientId', targetPatientId);
-      else if (targetPhone) params.set('phone', targetPhone);
+      if (targetPhone) params.set('phone', targetPhone);
 
-      const res = await fetch(`/api/appointments?${params.toString()}`);
+      const res = await fetch(`/api/appointments?${params.toString()}`, {
+        headers: { ...getAuthHeader() },
+      });
       let formatted: ConfirmedAppointment[] = [];
       if (res.ok) {
         const data = await res.json();
@@ -396,37 +433,13 @@ export const ReceptionistView: React.FC = () => {
         }));
       }
 
-      // If no appointments returned by phone query but token is in localStorage, fetch by token check
-      if (formatted.length === 0 && targetToken) {
-        try {
-          const checkRes = await fetch(`/api/appointments/check?tokenId=${encodeURIComponent(targetToken)}`);
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            if (checkData.found && checkData.appointment) {
-              const a = checkData.appointment;
-              formatted = [{
-                id: a.appointment_id || a.id,
-                token_number: a.token_number,
-                status: a.status || 'CONFIRMED',
-                date: a.appointment_date || a.date,
-                time_slot: a.time_slot || a.slot_time || (a.slots?.start_time ? `${a.slots.start_time.slice(0, 5)}` : ''),
-                doctor_name: a.doctors?.name || a.doctor_name,
-                department_name: a.departments?.name || a.department_name,
-                hospital_name: a.hospitals?.name || a.hospital_name,
-                created_at: a.created_at,
-              }];
-            }
-          }
-        } catch {}
-      }
-
       setMyAppointments(formatted);
     } catch (err) {
       console.warn('[ReceptionistView] Failed to fetch patient appointments:', err);
     } finally {
       setLoadingMyAppointments(false);
     }
-  }, [activePatient?.patient_id, activePatient?.phone, patientPhone]);
+  }, [activePatient, getAuthHeader]);
 
   useEffect(() => {
     fetchMyAppointments();
@@ -435,15 +448,8 @@ export const ReceptionistView: React.FC = () => {
   // Initial load on mount
   useEffect(() => {
     fetchDepartments();
-    fetchDoctors(selectedDepartment);
+    fetchDoctors();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reload doctors when department changes
-  useEffect(() => {
-    fetchDoctors(selectedDepartment);
-    setSelectedSlot('');
-    setSelectedSlotId('');
-  }, [selectedDepartment]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load slots when doctor or date changes
   useEffect(() => {
@@ -452,8 +458,9 @@ export const ReceptionistView: React.FC = () => {
     }
   }, [selectedDoctorId, selectedDate, fetchSlots]);
 
-  // Clean up any ongoing audio and recognition when unmounting
+  // Clean up any ongoing audio and recognition when unmounting, and pre-prime audio on mount
   useEffect(() => {
+    unlockAudioContext();
     return () => {
       stopSpeaking();
       if (speechControllerRef.current) {
@@ -477,19 +484,26 @@ export const ReceptionistView: React.FC = () => {
   const playAiVoice = useCallback(async (textToSpeak: string) => {
     if (!textToSpeak) return;
     setAiSpeechMessage(textToSpeak);
-    setIsSpeaking(true);
+
+    // Stop any stale speech, prime audio pipeline, and set speaking indicator
+    stopSpeaking();
     unlockAudioContext();
+    setIsSpeaking(true);
 
     const langName = getLanguageLabel(selectedLanguage);
-    const spoken = await speakText(textToSpeak, langName, {
-      onStart: () => setIsSpeaking(true),
-      onEnd: () => setIsSpeaking(false),
-      onError: (err: any) => {
-        console.warn('[ReceptionistView] Speech synthesis error:', err);
+    try {
+      const spoken = await speakText(textToSpeak, langName, {
+        onStart: () => setIsSpeaking(true),
+        onEnd: () => setIsSpeaking(false),
+        onError: (err: any) => {
+          console.warn('[ReceptionistView] Speech synthesis error:', err);
+          setIsSpeaking(false);
+        },
+      });
+      if (!spoken) {
         setIsSpeaking(false);
-      },
-    });
-    if (!spoken) {
+      }
+    } catch {
       setIsSpeaking(false);
     }
   }, [selectedLanguage, getLanguageLabel]);
@@ -502,6 +516,9 @@ export const ReceptionistView: React.FC = () => {
 
   // Replay the AI speech message
   const handleReplayVoice = () => {
+    // Reset any existing voice state so the first click runs cleanly
+    stopSpeaking();
+    setIsSpeaking(false);
     unlockAudioContext();
     if (aiSpeechMessage) {
       playAiVoice(aiSpeechMessage);
@@ -605,17 +622,17 @@ export const ReceptionistView: React.FC = () => {
             const docId = (validated as any).doctorId || (validated as any).doctor_id;
 
             if (departmentName) {
-              setSelectedDepartment(departmentName);
+              handleSelectDepartment(departmentName);
             }
             if (docId) {
-              setSelectedDoctorId(docId);
+              handleSelectDoctor(docId);
             } else if (doctorName) {
               const matchedDoc = doctors.find(
                 d => d.name.toLowerCase().includes(doctorName.toLowerCase()) ||
                      doctorName.toLowerCase().includes(d.name.toLowerCase())
               );
               if (matchedDoc) {
-                setSelectedDoctorId(matchedDoc.doctor_id);
+                handleSelectDoctor(matchedDoc.doctor_id);
               }
             }
             if (timeSlot) {
@@ -727,17 +744,17 @@ export const ReceptionistView: React.FC = () => {
           const docId = (validated as any).doctorId || (validated as any).doctor_id;
 
           if (departmentName) {
-            setSelectedDepartment(departmentName);
+            handleSelectDepartment(departmentName);
           }
           if (docId) {
-            setSelectedDoctorId(docId);
+            handleSelectDoctor(docId);
           } else if (doctorName) {
             const matchedDoc = doctors.find(
               d => d.name.toLowerCase().includes(doctorName.toLowerCase()) ||
                    doctorName.toLowerCase().includes(d.name.toLowerCase())
             );
             if (matchedDoc) {
-              setSelectedDoctorId(matchedDoc.doctor_id);
+              handleSelectDoctor(matchedDoc.doctor_id);
             }
           }
           if (timeSlot) {
@@ -806,9 +823,11 @@ export const ReceptionistView: React.FC = () => {
 
   // Manual booking handler — real backend only, zero mock/random fallback
   const handleBookSlot = async () => {
-    if (!activePatient) {
-      setSpeechError('Please sign in or register your patient account to confirm your appointment booking.');
-      openAuthModal('patient', 'login');
+    const finalPhone = (activePatient?.phone || patientPhone || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_phone') : null) || '').trim();
+    const finalName = (activePatient?.name || patientName || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_name') : null) || 'Patient').trim();
+
+    if (!finalPhone) {
+      setSpeechError('Please enter a patient contact phone number in the intake form above to confirm your appointment booking.');
       return;
     }
     if (!currentDoctor) {
@@ -824,7 +843,7 @@ export const ReceptionistView: React.FC = () => {
     const chosenSlotItem = detailedSlots.find(s => s.display_time === selectedSlot || s.slot_id === selectedSlotId);
     if (chosenSlotItem && !chosenSlotItem.available) {
       setSpeechError(`⚠️ The ${selectedSlot} slot has already been booked. Please pick another available slot.`);
-      fetchSlots(selectedDoctorId, selectedDate);
+      fetchSlots(currentDoctor.doctor_id, selectedDate);
       return;
     }
 
@@ -836,9 +855,9 @@ export const ReceptionistView: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify({
-          patientName: activePatient.name || patientName || 'Patient',
-          patientPhone: activePatient.phone || patientPhone,
-          patientId: activePatient.patient_id,
+          patientName: finalName,
+          patientPhone: finalPhone,
+          patientId: activePatient?.patient_id,
           hospitalId,
           doctorId: currentDoctor.doctor_id,
           doctorName: currentDoctor.name,
@@ -879,7 +898,11 @@ export const ReceptionistView: React.FC = () => {
         }));
 
         setGeneratedToken(tokenNum);
-        try { localStorage.setItem('medconnect_patient_token', tokenNum); } catch {}
+        try {
+          localStorage.setItem('medconnect_patient_token', tokenNum);
+          if (finalPhone) localStorage.setItem('medconnect_patient_phone', finalPhone);
+          if (finalName) localStorage.setItem('medconnect_patient_name', finalName);
+        } catch {}
         setBookedAppointmentId(aptId);
         const qrPayload = data.qr_code || data.qr_reference || data.appointment?.qr_reference;
         if (qrPayload) setBookedQrCode(typeof qrPayload === 'string' ? qrPayload : JSON.stringify(qrPayload));
@@ -896,7 +919,7 @@ export const ReceptionistView: React.FC = () => {
         playAiVoice(confirmSpeech);
 
         // Refresh slots after booking (one slot just got consumed)
-        fetchSlots(selectedDoctorId, selectedDate);
+        fetchSlots(currentDoctor.doctor_id, selectedDate);
         fetchMyAppointments();
       } else {
         // Real error — no silent demo fallback
@@ -925,7 +948,12 @@ export const ReceptionistView: React.FC = () => {
 
   // Real Emergency One-Click Booking Handler — Auto-allocates earliest available specialist slot
   const handleEmergencyBookSlot = async () => {
-    const emergPhone = activePatient?.phone || patientPhone || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_phone') : null) || '+91 98999 12345';
+    const emergPhone = activePatient?.phone || patientPhone || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_phone') : null);
+    if (!emergPhone) {
+      setSpeechError('Please sign in or enter your contact mobile number to book an emergency OPD slot.');
+      openAuthModal('patient', 'login');
+      return;
+    }
     const emergName = activePatient?.name || patientName || (typeof localStorage !== 'undefined' ? localStorage.getItem('medconnect_patient_name') : null) || 'Emergency Patient';
 
     setIsEmergencyBooking(true);
@@ -941,8 +969,8 @@ export const ReceptionistView: React.FC = () => {
           patientPhone: emergPhone,
           patientId: activePatient?.patient_id,
           hospitalId,
-          department: selectedDepartment || 'Cardiology',
-          departmentName: selectedDepartment || 'Cardiology',
+          department: selectedDepartment || liveDepartments[0] || '',
+          departmentName: selectedDepartment || liveDepartments[0] || '',
           symptoms: symptoms || 'Urgent Emergency OPD Request',
           source: 'emergency_one_click',
         }),
@@ -1044,10 +1072,8 @@ export const ReceptionistView: React.FC = () => {
       ...doctors.map(d => d.department_name).filter(Boolean),
     ])
   );
-  // Fallback departments if API hasn't returned data yet
-  const displayDepartments = liveDepartments.length > 0
-    ? liveDepartments
-    : ['Cardiology', 'Orthopedics', 'General Medicine', 'Neurology', 'Dermatology'];
+  // Live departments from database
+  const displayDepartments = liveDepartments;
 
   return (
     <div className="space-y-8 animate-fade-in-up">
@@ -1124,7 +1150,7 @@ export const ReceptionistView: React.FC = () => {
       </div>
 
       {/* Confirmed Appointments from Database Section */}
-      {myAppointments.length > 0 && (
+      {activePatient && myAppointments.length > 0 && (
         <div className="p-4 bg-emerald-500/5 dark:bg-emerald-950/20 border border-emerald-500/30 rounded-2xl shadow-hairline space-y-3 animate-fade-in">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
@@ -1558,11 +1584,7 @@ export const ReceptionistView: React.FC = () => {
                     whileTap={{ scale: 0.97 }}
                     whileHover={{ scale: 1.01 }}
                     key={dept}
-                    onClick={() => {
-                      setSelectedDepartment(dept);
-                      setSelectedSlot('');
-                      setSelectedSlotId('');
-                    }}
+                    onClick={() => handleSelectDepartment(dept)}
                     className={`py-2 px-3 text-xs font-mono rounded-lg border text-left transition-colors flex items-center justify-between ${
                       selectedDepartment.toLowerCase() === dept.toLowerCase()
                         ? 'bg-accent-light border-accent text-accent font-bold shadow-hairline'
@@ -1640,11 +1662,7 @@ export const ReceptionistView: React.FC = () => {
                         key={doc.doctor_id}
                         whileHover={{ scale: 1.01 }}
                         whileTap={{ scale: 0.99 }}
-                        onClick={() => {
-                          setSelectedDoctorId(doc.doctor_id);
-                          setSelectedSlot('');
-                          setSelectedSlotId('');
-                        }}
+                        onClick={() => handleSelectDoctor(doc.doctor_id)}
                         className={`p-3 rounded-xl border cursor-pointer transition-all ${
                           isSelected
                             ? 'bg-accent-light/40 border-accent shadow-hairline ring-1 ring-accent/30'
@@ -1711,11 +1729,7 @@ export const ReceptionistView: React.FC = () => {
                       whileTap={{ scale: 0.95 }}
                       key={item.iso}
                       type="button"
-                      onClick={() => {
-                        setSelectedDate(item.iso);
-                        setSelectedSlot('');
-                        setSelectedSlotId('');
-                      }}
+                      onClick={() => handleSelectDate(item.iso)}
                       className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg border text-center transition-all ${
                         isSelected
                           ? 'bg-accent border-accent text-white font-bold shadow-hairline'
@@ -1740,12 +1754,10 @@ export const ReceptionistView: React.FC = () => {
                 <input
                   type="date"
                   value={selectedDate}
-                  min={new Date().toISOString().split('T')[0]}
+                  min={getLocalIsoDate()}
                   onChange={(e) => {
                     if (e.target.value) {
-                      setSelectedDate(e.target.value);
-                      setSelectedSlot('');
-                      setSelectedSlotId('');
+                      handleSelectDate(e.target.value);
                     }
                   }}
                   className="bg-paper border border-rule rounded px-2 py-0.5 text-xs font-mono text-ink focus:outline-none focus:border-accent"
@@ -1779,6 +1791,18 @@ export const ReceptionistView: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {detailedSlots.length > 0 && slotCounts.available === 0 && (
+                <div className="p-3 mb-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1 text-xs font-mono">
+                  <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-bold">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>All slots fully reserved for {formatDisplayDate(selectedDate)}</span>
+                  </div>
+                  <p className="text-ink-2 text-[11px]">
+                    Pick another date above or use Fast-Track Emergency Allocation below.
+                  </p>
+                </div>
+              )}
 
               {detailedSlots.length > 0 ? (
                 <div className="grid grid-cols-3 gap-2">
@@ -1829,8 +1853,21 @@ export const ReceptionistView: React.FC = () => {
                   Fetching live availability from database...
                 </div>
               ) : (
-                <div className="text-xs font-mono text-ink-muted py-3 flex items-center gap-1.5 p-3 bg-paper-subtle rounded-xl border border-rule">
-                  <Clock className="w-4 h-4 text-ink-muted" />
+                <div className="text-xs font-mono text-ink-muted py-3.5 px-4 bg-paper-subtle rounded-xl border border-rule flex flex-col sm:flex-row items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-ink-muted shrink-0" />
+                    <span>No OPD slots scheduled for this date.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tomorrow = upcomingDates[1]?.iso;
+                      if (tomorrow) handleSelectDate(tomorrow);
+                    }}
+                    className="pulse-btn pulse-btn-sm text-[11px] font-mono border border-rule hover:border-accent"
+                  >
+                    Check Tomorrow →
+                  </button>
                 </div>
               )}
             </div>

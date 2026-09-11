@@ -290,22 +290,31 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/appointments/book' && req.method === 'POST') {
       const auth = await authenticateRequest(req);
-      if (!auth.valid || !auth.user) {
-        return sendJson(res, 401, {
-          error: 'UNAUTHORIZED',
-          message: 'Authentication required to book an appointment. Please sign in or register.',
-        });
-      }
-
       const body = await readBody(req);
 
-      // Enforce verified user identity — NEVER blindly trust frontend user ID
-      body.patientId = auth.user.id;
-      body.patient_id = auth.user.id;
-      body.patientName = auth.user.name || body.patientName || 'Patient';
-      body.patient_name = auth.user.name || body.patientName || 'Patient';
-      body.patientPhone = auth.user.phone || body.patientPhone;
-      body.patient_phone = auth.user.phone || body.patientPhone;
+      if (auth.valid && auth.user) {
+        // Enforce verified user identity for logged-in sessions
+        body.patientId = auth.user.id;
+        body.patient_id = auth.user.id;
+        body.patientName = auth.user.name || body.patientName || 'Patient';
+        body.patient_name = auth.user.name || body.patientName || 'Patient';
+        body.patientPhone = auth.user.phone || body.patientPhone;
+        body.patient_phone = auth.user.phone || body.patientPhone;
+      } else {
+        // Allow walk-in/kiosk/guest booking if patient phone is provided
+        const phone = (body.patientPhone || body.patient_phone || '').trim();
+        if (!phone) {
+          return sendJson(res, 400, {
+            success: false,
+            error: 'MISSING_PATIENT_PHONE',
+            message: 'Patient phone number is required to book an appointment. Please provide a contact number.',
+          });
+        }
+        body.patientName = (body.patientName || body.patient_name || 'Patient').trim();
+        body.patient_name = body.patientName;
+        body.patientPhone = phone;
+        body.patient_phone = phone;
+      }
 
       try {
         const booking = await bookAppointment(body);
@@ -374,11 +383,22 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/appointments' && req.method === 'GET') {
       const auth = await authenticateRequest(req);
-      const patientId = reqUrl.searchParams.get('patientId') || reqUrl.searchParams.get('patient_id') || (auth.valid && auth.user?.role === 'patient' ? auth.user.id : null);
-      const hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id') || (auth.valid && auth.user?.role === 'hospital' ? auth.user.id : null);
-      const doctorId = reqUrl.searchParams.get('doctorId') || reqUrl.searchParams.get('doctor_id');
-      const phone = reqUrl.searchParams.get('phone') || reqUrl.searchParams.get('patientPhone');
+      let patientId = reqUrl.searchParams.get('patientId') || reqUrl.searchParams.get('patient_id');
+      let hospitalId = reqUrl.searchParams.get('hospitalId') || reqUrl.searchParams.get('hospital_id');
+      let doctorId = reqUrl.searchParams.get('doctorId') || reqUrl.searchParams.get('doctor_id');
+      let phone = reqUrl.searchParams.get('phone') || reqUrl.searchParams.get('patientPhone');
       const status = reqUrl.searchParams.get('status');
+
+      // Patient Isolation: If request is authenticated as a patient, STRICTLY scope to their identity
+      if (auth.valid && auth.user?.role === 'patient') {
+        patientId = auth.user.id;
+        phone = auth.user.phone || phone;
+      } else if (auth.valid && auth.user?.role === 'hospital') {
+        hospitalId = hospitalId || auth.user.id;
+      } else if (!auth.valid && !patientId && !phone && !hospitalId && !doctorId) {
+        // Prevent unauthenticated full data dump of all patient appointments
+        return sendJson(res, 200, { success: true, count: 0, appointments: [] });
+      }
 
       const appointments = await db.getAppointments({
         patient_id: patientId,
@@ -392,9 +412,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/appointments/check' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
       const tokenId = reqUrl.searchParams.get('tokenId') || reqUrl.searchParams.get('token');
       const phone = reqUrl.searchParams.get('phone');
       const appointmentId = reqUrl.searchParams.get('appointmentId');
+
+      if (!tokenId && !phone && !appointmentId) {
+        return sendJson(res, 400, { success: false, message: 'tokenId, phone, or appointmentId is required' });
+      }
 
       const appts = await getAppointments();
       const match = appts.find(a =>
@@ -406,6 +431,18 @@ const server = http.createServer(async (req, res) => {
       if (!match) {
         return sendJson(res, 404, { found: false, message: 'No appointment found matching query.' });
       }
+
+      // If authenticated as a patient, ensure they cannot inspect appointments of other patients
+      if (auth.valid && auth.user?.role === 'patient') {
+        const cleanUserPhone = auth.user.phone ? auth.user.phone.replace(/\D/g, '') : '';
+        const cleanMatchPhone = match.patient_phone ? match.patient_phone.replace(/\D/g, '') : '';
+        const isOwner = match.patient_id === auth.user.id ||
+          (cleanUserPhone && cleanMatchPhone && (cleanUserPhone.endsWith(cleanMatchPhone.slice(-10)) || cleanMatchPhone.endsWith(cleanUserPhone.slice(-10))));
+        if (!isOwner) {
+          return sendJson(res, 403, { found: false, message: 'Access denied: Appointment belongs to another patient.' });
+        }
+      }
+
       return sendJson(res, 200, { found: true, appointment: match });
     }
 
@@ -743,7 +780,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname.startsWith('/api/n8n/') || pathname.startsWith('/webhook/')) {
-      const webhookPath = pathname.replace(/^\/api\/n8n\//, '').replace(/^\/webhook\//, '');
+      const webhookPath = pathname.replace(/^\/api\/n8n\/(?:webhook\/)?/, '').replace(/^\/webhook\//, '');
       const body = await readBody(req);
       const secret = process.env.N8N_WEBHOOK_SECRET || process.env.VITE_N8N_WEBHOOK_SECRET || 'medconnect-n8n-secret-key';
       const n8nBase = (process.env.N8N_WEBHOOK_URL || 'https://test-medconnect.app.n8n.cloud/webhook').replace(/\/$/, '');
@@ -773,7 +810,12 @@ const server = http.createServer(async (req, res) => {
       // If remote n8n returned 404 or failed and this is AI Receptionist, run verified WF1 workflow
       if (webhookPath === 'ai-receptionist' || webhookPath === 'medconnect-test') {
         const { executeWf1Local } = await import('./services/n8nService.js');
-        const localExec = executeWf1Local(body, req.headers);
+        const localHeaders = {
+          ...req.headers,
+          'x-webhook-secret': req.headers['x-webhook-secret'] || secret,
+          'x-medconnect-secret': req.headers['x-medconnect-secret'] || secret,
+        };
+        const localExec = executeWf1Local(body, localHeaders);
         if (localExec) {
           return sendJson(res, localExec.statusCode, localExec.body);
         }

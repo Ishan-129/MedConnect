@@ -67,18 +67,18 @@ export const AuthModal: React.FC = () => {
 
   // Hospital Login State
   const [hospLoginId, setHospLoginId] = useState('');
-  const [hospLoginPass, setHospLoginPass] = useState('medconnect123');
+  const [hospLoginPass, setHospLoginPass] = useState('');
 
   // Hospital Signup State
   const [hospName, setHospName] = useState('');
-  const [hospPhone, setHospPhone] = useState('+91 11 ');
+  const [hospPhone, setHospPhone] = useState('');
   const [hospTelegramId, setHospTelegramId] = useState('');
   const [hospAddress, setHospAddress] = useState('');
   const [hospLat, setHospLat] = useState<number>(28.5672);
   const [hospLon, setHospLon] = useState<number>(77.21);
   const [hospEmail, setHospEmail] = useState('');
   const [hospContactPerson, setHospContactPerson] = useState('');
-  const [hospPass, setHospPass] = useState('medconnect123');
+  const [hospPass, setHospPass] = useState('');
   const [hospResources, setHospResources] = useState<ResourceType[]>([
     'O_NEG_BLOOD',
     'OXYGEN',
@@ -88,20 +88,20 @@ export const AuthModal: React.FC = () => {
   ]);
 
   // Patient Login State
-  const [patLoginPhone, setPatLoginPhone] = useState('+91 98765 43210');
-  const [patLoginPass, setPatLoginPass] = useState('patient123');
+  const [patLoginPhone, setPatLoginPhone] = useState('');
+  const [patLoginPass, setPatLoginPass] = useState('');
 
   // Patient Signup State
   const [patName, setPatName] = useState('');
-  const [patPhone, setPatPhone] = useState('+91 ');
+  const [patPhone, setPatPhone] = useState('');
   const [patEmail, setPatEmail] = useState('');
   const [patBloodGroup, setPatBloodGroup] = useState('O+');
-  const [patAge, setPatAge] = useState<number>(28);
+  const [patAge, setPatAge] = useState<number | ''>('');
   const [patGender, setPatGender] = useState('Female');
   const [patEmergencyContact, setPatEmergencyContact] = useState('');
   const [patEmergencyPhone, setPatEmergencyPhone] = useState('');
   const [patAddress, setPatAddress] = useState('');
-  const [patPass, setPatPass] = useState('patient123');
+  const [patPass, setPatPass] = useState('');
 
   if (!isAuthModalOpen) return null;
 
@@ -213,7 +213,7 @@ export const AuthModal: React.FC = () => {
       email: patEmail,
       password: patPass,
       blood_group: patBloodGroup,
-      age: patAge,
+      age: patAge !== '' ? Number(patAge) : undefined,
       gender: patGender,
       emergency_contact_name: patEmergencyContact,
       emergency_contact_phone: patEmergencyPhone,
@@ -383,8 +383,8 @@ export const AuthModal: React.FC = () => {
                           onClick={async () => {
                             setIsLoading(true);
                             setErrorMsg(null);
-                            const email = h.contact_email || (h.name.toLowerCase().includes('safdarjung') ? 'safdarjung@hospital.gov.in' : 'aiims@hospital.gov.in');
-                            const res = await loginHospital(email, 'medconnect123');
+                            const email = h.contact_email || h.contact || h.hospital_id;
+                            const res = await loginHospital(email, hospLoginPass || 'medconnect123');
                             setIsLoading(false);
                             if (res.success) {
                               setSuccessMsg(`Authenticated as ${h.name.split(' ')[0]}`);
@@ -648,80 +648,6 @@ export const AuthModal: React.FC = () => {
               {authMode === 'login' ? (
                 /* Patient Login Form */
                 <form onSubmit={handlePatientLoginSubmit} className="space-y-4">
-                  {/* Quick-switch Demo Patient Buttons */}
-                  <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule space-y-2">
-                    <label className="text-[11px] font-mono text-ink-muted font-semibold flex items-center justify-between">
-                      <span>⚡ 1-Click Demo Patient Accounts:</span>
-                      <span className="text-accent text-[10px]">Instant Testing</span>
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsLoading(true);
-                          setErrorMsg(null);
-                          const res = await loginPatient('ananya@patient.medconnect.org', 'patient123');
-                          setIsLoading(false);
-                          if (res.success) {
-                            setSuccessMsg('Logged in as Ananya Deshmukh (Blood O-)');
-                            setTimeout(closeAuthModal, 600);
-                          } else {
-                            setErrorMsg(res.message || 'Login failed');
-                          }
-                        }}
-                        className={`p-2 rounded-lg text-left font-mono text-xs border transition-all flex items-center justify-between ${
-                          activePatient?.phone === '+91 98765 43210'
-                            ? 'bg-accent-light border-accent text-accent font-bold shadow-xs'
-                            : 'bg-paper border-rule hover:border-ink-muted text-ink'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold">Ananya Deshmukh</div>
-                          <div className="text-[10px] text-ink-muted">Blood O- · ananya@patient.medconnect.org</div>
-                        </div>
-                        {activePatient?.phone === '+91 98765 43210' && (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0 ml-1" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsLoading(true);
-                          setErrorMsg(null);
-                          const res = await loginPatient('rohan@patient.medconnect.org', 'patient123');
-                          setIsLoading(false);
-                          if (res.success) {
-                            setSuccessMsg('Logged in as Rohan Verma (Blood B+)');
-                            setTimeout(closeAuthModal, 600);
-                          } else {
-                            setErrorMsg(res.message || 'Login failed');
-                          }
-                        }}
-                        className={`p-2 rounded-lg text-left font-mono text-xs border transition-all flex items-center justify-between ${
-                          activePatient?.phone === '+91 98111 22334'
-                            ? 'bg-accent-light border-accent text-accent font-bold shadow-xs'
-                            : 'bg-paper border-rule hover:border-ink-muted text-ink'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold">Rohan Verma</div>
-                          <div className="text-[10px] text-ink-muted">Blood B+ · rohan@patient.medconnect.org</div>
-                        </div>
-                        {activePatient?.phone === '+91 98111 22334' && (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0 ml-1" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="relative flex items-center justify-center">
-                    <div className="border-t border-rule w-full"></div>
-                    <span className="bg-paper px-3 text-[10px] font-mono text-ink-muted uppercase">
-                      Or Sign In With Mobile
-                    </span>
-                    <div className="border-t border-rule w-full"></div>
-                  </div>
 
                   <div className="pulse-form-group">
                     <label className="pulse-label">Registered Mobile Number</label>

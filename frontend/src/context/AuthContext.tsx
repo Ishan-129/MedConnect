@@ -51,39 +51,10 @@ export interface AuthContextType {
   getAuthHeader: () => Record<string, string>;
 }
 
-const DEFAULT_HOSPITALS: HospitalUser[] = [
-  {
-    hospital_id: '11111111-1111-4111-a111-111111111111',
-    name: 'All India Institute of Medical Sciences (AIIMS) New Delhi',
-    contact: '+91-11-26588500',
-    telegram_chat_id: '6537122486',
-    latitude: 28.5672,
-    longitude: 77.21,
-    verification_status: 'VERIFIED',
-    address: 'Ansari Nagar, New Delhi',
-    contact_email: 'emergency@aiims.gov.in',
-    contact_person: 'Medical Superintendent',
-    supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
-  },
-  {
-    hospital_id: '22222222-2222-4222-a222-222222222222',
-    name: 'Safdarjung Hospital',
-    contact: '+91-11-26165060',
-    telegram_chat_id: '6537122486',
-    latitude: 28.57,
-    longitude: 77.2078,
-    verification_status: 'VERIFIED',
-    address: 'Ring Road, Opposite AIIMS, New Delhi',
-    contact_email: 'emergency@safdarjung.gov.in',
-    contact_person: 'Chief Medical Officer',
-    supported_resources: ['BLOOD_O_NEG', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
-  },
-];
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [allHospitals, setAllHospitals] = useState<HospitalUser[]>(DEFAULT_HOSPITALS);
+  const [allHospitals, setAllHospitals] = useState<HospitalUser[]>([]);
   const [activeHospital, setActiveHospital] = useState<HospitalUser | null>(null);
   const [activePatient, setActivePatient] = useState<PatientUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -130,11 +101,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ],
         }));
         if (liveHospitals.length > 0) {
-          setAllHospitals((prev) => {
-            const existingIds = new Set(liveHospitals.map(h => h.hospital_id));
-            const localOnly = prev.filter(h => !existingIds.has(h.hospital_id));
-            return [...liveHospitals, ...localOnly];
-          });
+          setAllHospitals(liveHospitals);
         }
       }
     } catch (e) {
@@ -513,6 +480,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await supabase.auth.signOut();
       await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     } finally {
+      try {
+        localStorage.removeItem('medconnect_patient_token');
+        localStorage.removeItem('medconnect_patient_phone');
+        localStorage.removeItem('medconnect_patient_name');
+      } catch {}
       setActivePatient(null);
       setToken(null);
     }

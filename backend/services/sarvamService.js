@@ -11,6 +11,8 @@
  */
 
 import { Blob } from 'node:buffer';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Full Sarvam API language code map (all supported Indic languages)
 export const LANGUAGE_CODE_MAP = {
@@ -39,6 +41,9 @@ const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1500;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
+// Quota exhaustion cache to avoid stalled roundtrips when Sarvam has 0 credits
+let sarvamTtsExhaustedUntil = 0;
+
 /**
  * Retrieves the configured Sarvam API key server-side.
  * SECURITY: Never logs the key, returns masked/boolean status.
@@ -48,6 +53,29 @@ export function getSarvamCredentials() {
   if (typeof process !== 'undefined' && process.env) {
     apiKey = process.env.SARVAM_API_KEY || process.env.VITE_SARVAM_API_KEY || '';
   }
+
+  // Fallback: auto-read from candidate .env files if not in process.env
+  if (!apiKey) {
+    try {
+      const candidates = [
+        path.resolve(process.cwd(), '.env'),
+        path.resolve(process.cwd(), '../.env'),
+        path.resolve(process.cwd(), 'backend/.env'),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          const content = fs.readFileSync(p, 'utf8');
+          const match = content.match(/SARVAM_API_KEY\s*=\s*([^\r\n]+)/);
+          if (match && match[1]) {
+            apiKey = match[1].trim().replace(/^['"]|['"]$/g, '');
+            process.env.SARVAM_API_KEY = apiKey;
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
   const trimmed = apiKey.trim();
   return {
     apiKey: trimmed,
@@ -350,6 +378,15 @@ export async function synthesizeSpeech({
     };
   }
 
+  // If credits are already known to be exhausted, fail immediately to prevent slow roundtrips
+  if (Date.now() < sarvamTtsExhaustedUntil) {
+    return {
+      success: false,
+      status: 'SARVAM_NO_CREDITS',
+      error: 'Sarvam TTS credits exhausted.',
+    };
+  }
+
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -379,6 +416,7 @@ export async function synthesizeSpeech({
         const data = await response.json();
         const audios = data.audios || [];
         if (audios.length > 0 && audios[0]) {
+          sarvamTtsExhaustedUntil = 0; // Reset on success
           return {
             success: true,
             status: 'SUCCESS',
@@ -392,6 +430,16 @@ export async function synthesizeSpeech({
 
       const errStatus = response.status;
       const errBody = await response.text().catch(() => '(no body)');
+
+      // If credits are exhausted (402), cache for 60 seconds and do not retry
+      if (errStatus === 402 || errBody.includes('insufficient_quota_error')) {
+        sarvamTtsExhaustedUntil = Date.now() + 60000;
+        return {
+          success: false,
+          status: 'SARVAM_NO_CREDITS',
+          error: `Sarvam TTS HTTP 402: ${errBody}`,
+        };
+      }
 
       if (RETRYABLE_STATUS_CODES.has(errStatus) && attempt < maxRetries) {
         await sleep(RETRY_BACKOFF_MS * attempt);
