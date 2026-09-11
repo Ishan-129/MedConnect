@@ -64,7 +64,9 @@ function MainAppContent() {
 
               {activePortal === 'patient' && (
                 <>
-                  {patientTab === 'receptionist' && <ReceptionistView />}
+                  {patientTab === 'receptionist' && (
+                    <ReceptionistView onBackToHome={() => setActivePortal('landing')} />
+                  )}
                   {patientTab === 'queue' && (
                     <AuthGate role="patient" title="Patient Queue & Token Tracker">
                       <QueueView defaultRole="patient" hideRoleSwitcher={true} />

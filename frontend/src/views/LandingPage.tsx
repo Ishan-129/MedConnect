@@ -137,7 +137,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectPortal, setAct
             { value: '<45s', label: 'ER Match Latency', color: 'text-ink' },
             { value: '15 km', label: 'Haversine Radar Proximity', color: 'text-accent' },
             { value: '180s', label: 'Auto-Escalation Call', color: 'text-amber-500' },
-            { value: '4 Langs', label: 'Sarvam AI Indic STT', color: 'text-operational' }
+            { value: '4 Langs', label: 'Multilingual Indic STT', color: 'text-operational' }
           ].map((stat, i) => (
             <motion.div
               key={stat.label}

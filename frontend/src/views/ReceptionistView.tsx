@@ -11,6 +11,9 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowRight,
+  ArrowLeft,
+  HeartPulse,
+  ChevronDown,
   User,
   Phone,
   Shield,
@@ -51,7 +54,11 @@ export const getLocalIsoDate = (d = new Date()): string => {
   return `${year}-${month}-${day}`;
 };
 
-export const ReceptionistView: React.FC = () => {
+export interface ReceptionistViewProps {
+  onBackToHome?: () => void;
+}
+
+export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome }) => {
   const { activePatient, activeHospital, allHospitals, openAuthModal, getAuthHeader } = useAuth();
 
   const [isRecording, setIsRecording] = useState(false);
@@ -581,7 +588,7 @@ export const ReceptionistView: React.FC = () => {
 
     if (controller) {
       setIsProcessing(true);
-      setTranscript('Processing voice turn via Sarvam STT & AI Receptionist...');
+      setTranscript('Processing voice turn with AI Receptionist...');
 
       try {
         const { transcript: localText, audioBlob } = await controller.stop();
@@ -1075,6 +1082,38 @@ export const ReceptionistView: React.FC = () => {
   // Live departments from database
   const displayDepartments = liveDepartments;
 
+  const languageOptions: { code: 'en-IN' | 'hi-IN' | 'ta-IN' | 'te-IN'; label: string; nativeLabel: string }[] = [
+    { code: 'en-IN', label: 'English', nativeLabel: 'English' },
+    { code: 'hi-IN', label: 'Hindi', nativeLabel: 'हिंदी' },
+    { code: 'ta-IN', label: 'Tamil', nativeLabel: 'தமிழ்' },
+    { code: 'te-IN', label: 'Telugu', nativeLabel: 'తెలుగు' },
+  ];
+
+  const handleLanguageChange = (nextLang: 'hi-IN' | 'en-IN' | 'ta-IN' | 'te-IN') => {
+    setSelectedLanguage(nextLang);
+    if (isSpeaking) handleStopSpeaking();
+    const greetings: Record<string, string> = {
+      'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
+      'en-IN': 'Hello! Welcome to Yashoda Hospital MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.',
+      'ta-IN': 'வணக்கம்! மெட்கனெக்ட் ஏஐ வரவேற்பாளருக்கு வரவேற்கிறோம். மருத்துவர் சந்திப்பை பதிவு செய்ய பேசவும் அல்லது தட்டச்சு செய்யவும்.',
+      'te-IN': 'నమస్కారం! మెడ్‌కనెక్ట్ ఏఐ రిసెప్షనిస్ట్‌కు స్వాగతం. డాక్టర్ అపాయింట్‌మెంట్ బుక్ చేయడానికి మాట్లాడండి లేదా టైప్ చేయండి.',
+    };
+    if (Object.values(greetings).includes(aiSpeechMessage) || !aiSpeechMessage) {
+      setAiSpeechMessage(greetings[nextLang] || greetings['hi-IN']);
+    }
+  };
+
+  const quickPrompts = [
+    { text: 'Book an appointment', query: 'I want to book an appointment with a doctor' },
+    { text: 'Check my reports', query: 'How can I check my reports and test results?' },
+    { text: 'Find nearest hospital', query: 'Find the nearest hospital with available OPD and emergency' },
+  ];
+
+  const handleQuickPromptClick = (prompt: { text: string; query: string }) => {
+    setSymptoms(prompt.text);
+    handleAskQuestion(prompt.query);
+  };
+
   return (
     <div className="space-y-8 animate-fade-in-up">
       
@@ -1090,9 +1129,6 @@ export const ReceptionistView: React.FC = () => {
           <h1 className="pulse-h2 text-2xl font-bold text-ink mt-1">
             Multilingual Voice AI Receptionist
           </h1>
-          <p className="pulse-text-sm text-ink-muted mt-0.5">
-            Sarvam AI Saaras:v1 STT + OpenAI administrative intent classifier & atomic OPD slot lock.
-          </p>
         </div>
 
         <div className="flex items-center space-x-3">
@@ -1100,24 +1136,11 @@ export const ReceptionistView: React.FC = () => {
             <span className="text-xs font-mono text-ink-muted font-medium">Language:</span>
             <select
               value={selectedLanguage}
-              onChange={(e) => {
-                const nextLang = e.target.value as any;
-                setSelectedLanguage(nextLang);
-                if (isSpeaking) handleStopSpeaking();
-                const greetings: Record<string, string> = {
-                  'hi-IN': 'नमस्ते! यशोदा हॉस्पिटल के मेडकनेक्ट एआई रिसेप्शनिस्ट में आपका स्वागत है। आप डॉक्टर अपॉइंटमेंट बुक कर सकते हैं या अपनी कतार स्थिति देख सकते हैं।',
-                  'en-IN': 'Hello! Welcome to Yashoda Hospital MedConnect AI Receptionist. You can book doctor appointments or track your token queue status.',
-                  'ta-IN': 'வணக்கம்! மெட்கனெக்ட் ஏஐ வரவேற்பாளருக்கு வரவேற்கிறோம். மருத்துவர் சந்திப்பை பதிவு செய்ய பேசவும் அல்லது தட்டச்சு செய்யவும்.',
-                  'te-IN': 'నమస్కారం! మెడ్‌కనెక్ట్ ఏఐ రిసెప్షనిస్ట్‌కు స్వాగతం. డాక్టర్ అపాయింట్‌మెంట్ బుక్ చేయడానికి మాట్లాడండి లేదా టైప్ చేయండి.',
-                };
-                if (Object.values(greetings).includes(aiSpeechMessage) || !aiSpeechMessage) {
-                  setAiSpeechMessage(greetings[nextLang] || greetings['hi-IN']);
-                }
-              }}
+              onChange={(e) => handleLanguageChange(e.target.value as any)}
               className="pulse-select text-xs font-mono font-semibold py-1 px-2 text-accent border-rule bg-paper-2"
             >
-              <option value="hi-IN">Hindi (hi-IN)</option>
               <option value="en-IN">English (en-IN)</option>
+              <option value="hi-IN">Hindi (hi-IN)</option>
               <option value="ta-IN">Tamil (ta-IN)</option>
               <option value="te-IN">Telugu (te-IN)</option>
             </select>
@@ -1237,137 +1260,209 @@ export const ReceptionistView: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left Column: Voice Intake Widget */}
+        {/* Left Column: Voice Intake Widget (Styled to match Image 1, 2, 3 references) */}
         <div className="lg:col-span-6 space-y-6">
-          <div className="pulse-card relative overflow-hidden">
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-rule-subtle">
-              <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
-                <Mic className="w-4 h-4 text-accent" />
-                <span>Voice Input Stream (Sarvam AI Saaras:v1)</span>
-              </h3>
+          <div className="pulse-card relative overflow-hidden p-6 rounded-2xl bg-paper-2 border border-rule shadow-sm">
+            
+            {/* Top Navigation Bar matching Image 1 */}
+            <div className="flex items-center justify-between pb-4 border-b border-rule-subtle gap-2">
               <div className="flex items-center space-x-2">
-                {isSpeaking && (
-                  <button
-                    onClick={handleStopSpeaking}
-                    className="flex items-center space-x-1 text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30"
-                    title="Stop AI Voice"
-                  >
-                    <VolumeX className="w-3 h-3" />
-                    <span>Mute</span>
-                  </button>
-                )}
-                <span className="pulse-badge pulse-badge-neutral text-[10px]">
-                  Web Audio API · 16kHz WAV
+                <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
+                  <HeartPulse className="w-4 h-4 text-accent animate-pulse-gentle" />
+                </div>
+                <span className="font-extrabold text-sm sm:text-base tracking-tight text-ink font-display">
+                  MedConnect <span className="text-accent">Pulse</span>
                 </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onBackToHome ? onBackToHome() : window.scrollTo({ top: 0, behavior: 'smooth' })}
+                className="flex items-center space-x-1.5 text-xs sm:text-sm font-semibold text-ink-muted hover:text-accent transition-colors cursor-pointer py-1 px-2.5 rounded-lg hover:bg-paper-subtle"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back to Home</span>
+              </button>
+
+              <div className="relative">
+                <select
+                  value={selectedLanguage}
+                  onChange={(e) => handleLanguageChange(e.target.value as any)}
+                  className="appearance-none bg-paper-subtle border border-rule hover:border-accent/40 rounded-xl px-3 py-1.5 pr-7 text-xs sm:text-sm font-semibold text-ink cursor-pointer outline-none focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="en-IN">English</option>
+                  <option value="hi-IN">हिंदी</option>
+                  <option value="ta-IN">தமிழ்</option>
+                  <option value="te-IN">తెలుగు</option>
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-ink-muted absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
             </div>
 
-            {/* Microphone Interaction Surface with Audio Visualizer */}
-            <div className="flex flex-col items-center justify-center py-8 bg-paper-subtle rounded-xl border border-rule relative">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.94 }}
-                transition={springs.snappy}
-                onClick={handleToggleVoice}
-                disabled={isProcessing}
-                className={`relative p-6 rounded-full transition-colors ${
+            {/* Main Stage: Glowing Mic Button, Title & Language Pills (Image 1) */}
+            <div className="flex flex-col items-center justify-center pt-8 pb-4 text-center">
+              
+              {/* Concentric Soft Glowing Ripple Rings around Mic Button */}
+              <div className="relative flex items-center justify-center my-3">
+                <div className={`absolute w-44 h-44 rounded-full transition-all duration-700 pointer-events-none ${
                   isRecording
-                    ? 'bg-emergency text-white shadow-dropdown ring-4 ring-emergency/30'
-                    : isProcessing
-                    ? 'bg-slate-700 text-slate-300'
+                    ? 'bg-emergency/10 ring-8 ring-emergency/15 animate-ping'
                     : isSpeaking
-                    ? 'bg-amber-500 text-white shadow-dropdown ring-4 ring-amber-500/30'
-                    : 'bg-accent text-white hover:bg-accent-hover shadow-hairline'
-                }`}
-                title={isRecording ? 'Stop Recording' : isSpeaking ? 'AI is speaking (Click to record)' : 'Start Speaking'}
-              >
-                {isProcessing ? (
-                  <Loader2 className="w-8 h-8 animate-spin" />
-                ) : isRecording ? (
-                  <MicOff className="w-8 h-8" />
-                ) : isSpeaking ? (
-                  <Volume2 className="w-8 h-8 animate-pulse" />
-                ) : (
-                  <Mic className="w-8 h-8" />
-                )}
-              </motion.button>
+                    ? 'bg-amber-500/10 ring-8 ring-amber-500/15 animate-pulse'
+                    : 'bg-blue-500/5 ring-8 ring-blue-500/10'
+                }`} />
+                <div className={`absolute w-36 h-36 rounded-full transition-all pointer-events-none ${
+                  isRecording
+                    ? 'bg-emergency/15'
+                    : isSpeaking
+                    ? 'bg-amber-500/15'
+                    : 'bg-blue-500/10'
+                }`} />
+                <div className={`absolute w-28 h-28 rounded-full transition-all pointer-events-none ${
+                  isRecording
+                    ? 'bg-emergency/20'
+                    : isSpeaking
+                    ? 'bg-amber-500/20'
+                    : 'bg-blue-500/15'
+                }`} />
 
-              {/* Soundwave Animation equalizer bars when active */}
-              {isRecording ? (
-                <div className="flex items-center justify-center gap-1.5 mt-5 h-8">
-                  {[0.1, 0.25, 0.4, 0.15, 0.3].map((delay, i) => {
-                    const heightRange = audioVolume > 20
-                      ? ['10px', `${Math.min(36, 14 + audioVolume * 0.25)}px`, '14px', `${Math.min(36, 18 + audioVolume * 0.2)}px`, '10px']
-                      : ['8px', '32px', '14px', '28px', '8px'];
-                    return (
-                      <motion.span
-                        key={i}
-                        className="w-1.5 bg-emergency rounded-full"
-                        animate={{ height: heightRange }}
-                        transition={{
-                          duration: 0.9,
-                          repeat: Infinity,
-                          ease: 'easeInOut',
-                          delay: delay,
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              ) : isSpeaking ? (
-                <div className="flex items-center justify-center gap-1.5 mt-5 h-8">
-                  {[0.1, 0.2, 0.3, 0.15, 0.25].map((delay, i) => (
+                {/* Central Interactive Mic Button */}
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.94 }}
+                  transition={springs.snappy}
+                  onClick={handleToggleVoice}
+                  disabled={isProcessing}
+                  className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg ${
+                    isRecording
+                      ? 'bg-emergency text-white shadow-emergency/40 ring-4 ring-emergency/30'
+                      : isProcessing
+                      ? 'bg-slate-700 text-slate-300'
+                      : isSpeaking
+                      ? 'bg-amber-500 text-white shadow-amber-500/40 ring-4 ring-amber-500/30'
+                      : 'bg-accent hover:bg-accent-hover text-white shadow-accent/30 hover:shadow-accent/50 ring-4 ring-accent/20'
+                  }`}
+                  title={isRecording ? 'Stop Recording' : isSpeaking ? 'AI is speaking (Click to record)' : 'Start Speaking'}
+                >
+                  {isProcessing ? (
+                    <Loader2 className="w-8 h-8 animate-spin" />
+                  ) : isRecording ? (
+                    <MicOff className="w-8 h-8" />
+                  ) : isSpeaking ? (
+                    <Volume2 className="w-8 h-8 animate-pulse" />
+                  ) : (
+                    <Mic className="w-8 h-8" />
+                  )}
+                </motion.button>
+              </div>
+
+              {/* Title & Subtitle from Image 1 */}
+              <h2 className="text-2xl sm:text-3xl font-bold text-ink tracking-tight mt-5">
+                How can I help you today?
+              </h2>
+              <p className="text-sm sm:text-base text-ink-muted mt-1.5 font-normal">
+                Speak naturally in your preferred language
+              </p>
+
+              {/* Language Selection Pills from Image 1 */}
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-5">
+                {languageOptions.map((lang) => {
+                  const isActive = selectedLanguage === lang.code;
+                  return (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      onClick={() => handleLanguageChange(lang.code)}
+                      className={`px-5 py-2 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-accent text-white shadow-sm ring-2 ring-accent/30'
+                          : 'bg-paper-2 border border-rule text-ink-2 hover:border-accent/50 hover:bg-paper-subtle'
+                      }`}
+                    >
+                      {lang.nativeLabel}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Quick Query Suggestion Pills from Image 1 */}
+              <div className="flex flex-wrap items-center justify-center gap-2.5 mt-5">
+                {quickPrompts.map((prompt) => (
+                  <button
+                    key={prompt.text}
+                    type="button"
+                    onClick={() => handleQuickPromptClick(prompt)}
+                    className="px-4 py-2 rounded-2xl bg-accent-light/50 hover:bg-accent-light text-accent border border-accent/20 hover:border-accent/40 text-xs sm:text-sm font-medium transition-all cursor-pointer shadow-xs hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    "{prompt.text}"
+                  </button>
+                ))}
+              </div>
+
+              {/* Symmetrical Audio Waveform Visualizer from Image 1 */}
+              <div className="flex items-center justify-center gap-1 mt-6 h-8">
+                {[4, 6, 8, 10, 14, 18, 24, 30, 24, 18, 14, 10, 8, 6, 4].map((baseHeight, idx) => {
+                  const activeHeight = isRecording
+                    ? Math.min(32, Math.max(6, (audioVolume > 15 ? audioVolume * 0.35 : baseHeight) * (idx % 2 === 0 ? 1.2 : 0.8)))
+                    : isSpeaking
+                    ? Math.min(28, baseHeight * (idx % 2 === 0 ? 1.1 : 0.7))
+                    : baseHeight * 0.45;
+                  return (
                     <motion.span
-                      key={i}
-                      className="w-1.5 bg-amber-400 rounded-full"
-                      animate={{ height: ['8px', '24px', '12px', '28px', '8px'] }}
+                      key={idx}
+                      className={`w-1 rounded-full transition-colors ${
+                        isRecording
+                          ? 'bg-emergency'
+                          : isSpeaking
+                          ? 'bg-amber-400'
+                          : 'bg-accent'
+                      }`}
+                      animate={{
+                        height: isRecording || isSpeaking ? [`${baseHeight * 0.4}px`, `${activeHeight}px`, `${baseHeight * 0.4}px`] : `${baseHeight * 0.4}px`,
+                      }}
                       transition={{
-                        duration: 0.7,
-                        repeat: Infinity,
+                        duration: isRecording ? 0.6 : 0.85,
+                        repeat: isRecording || isSpeaking ? Infinity : 0,
                         ease: 'easeInOut',
-                        delay: delay,
+                        delay: idx * 0.04,
                       }}
                     />
-                  ))}
-                </div>
-              ) : (
-                <div className="flex items-center justify-center gap-1 mt-4">
-                  <span className="pulse-dot pulse-dot-green animate-pulse-gentle" />
-                  <span className="text-xs font-mono text-ink-muted">Awaiting Audio Stream</span>
-                </div>
-              )}
+                  );
+                })}
+              </div>
 
-              <span className="text-xs font-mono text-ink mt-3 font-semibold">
+              {/* Live Status Label */}
+              <div className="mt-3 text-xs font-mono text-ink-muted font-medium">
                 {isProcessing
                   ? 'Processing AI Receptionist Turn...'
                   : isRecording
-                  ? 'Transcribing via Sarvam Saaras:v1 Engine...'
+                  ? 'Transcribing your voice stream...'
                   : isSpeaking
                   ? 'AI Receptionist is Speaking Response...'
-                  : 'Click to Speak (or test speech synthesis)'}
-              </span>
-              <span className="text-[11px] font-mono text-ink-muted mt-1">
-                Supports Accented Hindi, Indian English, Tamil, Telugu
-              </span>
+                  : 'Click the microphone to speak or type below'}
+              </div>
             </div>
 
-            {/* Live Transcript Output & Playback Controls */}
-            <div className="mt-4 space-y-1.5">
+            {/* Live Transcript Output & Playback Controls (Image 2) */}
+            <div className="mt-4 space-y-2">
               <div className="flex items-center justify-between">
-                <label className="pulse-label">STT Normalized Transcript:</label>
+                <label className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
+                  STT Normalized Transcript:
+                </label>
                 {aiSpeechMessage && (
                   <button
+                    type="button"
                     onClick={handleReplayVoice}
                     disabled={isSpeaking || isRecording}
-                    className="flex items-center space-x-1 text-[11px] font-mono text-accent hover:underline disabled:opacity-50"
+                    className="flex items-center space-x-1 text-xs font-medium text-accent hover:underline disabled:opacity-50 cursor-pointer"
                     title="Replay AI Speech"
                   >
-                    <RotateCcw className="w-3 h-3" />
+                    <RotateCcw className="w-3.5 h-3.5" />
                     <span>Replay Voice</span>
                   </button>
                 )}
               </div>
-              <div className="p-3 bg-paper-2 rounded-xl border border-rule font-mono text-xs text-ink min-h-[52px] flex items-center">
+              <div className="p-4 bg-paper-2 rounded-2xl border border-rule font-mono text-xs sm:text-sm text-ink min-h-[58px] flex items-center shadow-xs">
                 <AnimatePresence mode="wait">
                   <motion.span
                     key={transcript || 'placeholder'}
@@ -1386,9 +1481,9 @@ export const ReceptionistView: React.FC = () => {
 
             {/* Real AI Receptionist Live Response Display */}
             {aiSpeechMessage && (
-              <div className="mt-3 space-y-1.5 animate-fade-in">
+              <div className="mt-4 space-y-2 animate-fade-in">
                 <div className="flex items-center justify-between">
-                  <label className="pulse-label flex items-center space-x-1.5 text-accent">
+                  <label className="text-xs font-semibold uppercase tracking-wider flex items-center space-x-1.5 text-accent">
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>AI Receptionist Live Response:</span>
                   </label>
@@ -1396,25 +1491,25 @@ export const ReceptionistView: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleReplayVoice}
-                      className="px-2.5 py-0.5 rounded-md bg-accent/10 hover:bg-accent/20 text-accent text-[11px] font-mono font-medium flex items-center gap-1.5 transition-colors border border-accent/20 cursor-pointer"
+                      className="px-2.5 py-1 rounded-lg bg-accent/10 hover:bg-accent/20 text-accent text-xs font-medium flex items-center gap-1.5 transition-colors border border-accent/20 cursor-pointer"
                       title={isSpeaking ? 'AI is currently speaking (click to restart)' : 'Play AI voice aloud'}
                     >
                       <Volume2 className={`w-3.5 h-3.5 ${isSpeaking ? 'animate-pulse text-accent' : ''}`} />
                       <span>{isSpeaking ? 'Speaking...' : 'Play Voice'}</span>
                     </button>
-                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       Live Backend Engine
                     </span>
                   </div>
                 </div>
-                <div className="p-3.5 bg-paper-subtle rounded-xl border border-accent/30 font-mono text-xs text-ink shadow-hairline">
+                <div className="p-4 bg-paper-subtle rounded-2xl border border-accent/30 text-xs sm:text-sm text-ink shadow-xs">
                   <p className="leading-relaxed whitespace-pre-wrap">{aiSpeechMessage}</p>
                 </div>
 
                 {suggestedActions && suggestedActions.length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-2 items-center">
-                    <span className="text-[11px] font-mono text-ink-muted">Available Slots (1-Click Select):</span>
+                    <span className="text-xs text-ink-muted font-medium">Available Slots (1-Click Select):</span>
                     {suggestedActions.map((action, idx) => (
                       <button
                         key={idx}
@@ -1426,7 +1521,7 @@ export const ReceptionistView: React.FC = () => {
                           setSelectedSlot(chosen);
                           handleAskQuestion(chosen);
                         }}
-                        className="px-3 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 text-xs font-mono font-semibold transition-all hover:scale-105 active:scale-95 flex items-center gap-1 cursor-pointer shadow-xs"
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all hover:scale-105 active:scale-95 flex items-center gap-1 cursor-pointer shadow-xs"
                       >
                         {action.label || action.text}
                       </button>
@@ -1436,50 +1531,53 @@ export const ReceptionistView: React.FC = () => {
               </div>
             )}
 
-            {/* Patient Details Form */}
-            <div className="mt-6 pt-5 border-t border-rule-subtle grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="pulse-form-group">
-                <label className="pulse-label flex items-center space-x-1.5">
-                  <User className="w-3.5 h-3.5 text-ink-muted" />
-                  <span>Patient Full Name</span>
-                </label>
-                <input
-                  type="text"
-                  value={patientName}
-                  onChange={(e) => {
-                    setPatientName(e.target.value);
-                    try { localStorage.setItem('medconnect_patient_name', e.target.value); } catch {}
-                  }}
-                  className="pulse-input"
-                  placeholder="e.g. Ananya Deshmukh"
-                />
+            {/* Patient Details & Chat Input Block (Image 3) */}
+            <div className="mt-8 pt-6 border-t border-rule space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-ink flex items-center space-x-1.5">
+                    <User className="w-4 h-4 text-ink-muted" />
+                    <span>Patient Full Name</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={patientName}
+                    onChange={(e) => {
+                      setPatientName(e.target.value);
+                      try { localStorage.setItem('medconnect_patient_name', e.target.value); } catch {}
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-paper-2 rounded-xl border border-rule focus:border-accent focus:ring-2 focus:ring-accent/20 text-sm text-ink placeholder:text-ink-muted/50 transition-all outline-none"
+                    placeholder="e.g. Ananya Deshmukh"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-ink flex items-center space-x-1.5">
+                    <Phone className="w-4 h-4 text-ink-muted" />
+                    <span>Phone Number</span>
+                  </label>
+                  <input
+                    type="tel"
+                    value={patientPhone}
+                    onChange={(e) => {
+                      setPatientPhone(e.target.value);
+                      try { localStorage.setItem('medconnect_patient_phone', e.target.value); } catch {}
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-paper-2 rounded-xl border border-rule focus:border-accent focus:ring-2 focus:ring-accent/20 text-sm text-ink placeholder:text-ink-muted/50 transition-all outline-none"
+                    placeholder="+91 98765 43210"
+                  />
+                </div>
               </div>
 
-              <div className="pulse-form-group">
-                <label className="pulse-label flex items-center space-x-1.5">
-                  <Phone className="w-3.5 h-3.5 text-ink-muted" />
-                  <span>Phone Number</span>
-                </label>
-                <input
-                  type="tel"
-                  value={patientPhone}
-                  onChange={(e) => {
-                    setPatientPhone(e.target.value);
-                    try { localStorage.setItem('medconnect_patient_phone', e.target.value); } catch {}
-                  }}
-                  className="pulse-input"
-                  placeholder="+91 98765 43210"
-                />
-              </div>
-
-              <div className="sm:col-span-2 pulse-form-group">
-                <label className="pulse-label flex items-center justify-between">
-                  <div className="flex items-center space-x-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-accent" />
+              {/* Chat Block with "ask your query" */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-ink flex items-center space-x-1.5">
+                    <Sparkles className="w-4 h-4 text-accent" />
                     <span>Ask AI Receptionist / Reason for Visit</span>
-                  </div>
-                  <span className="text-[10px] text-ink-muted font-mono">Press Enter or click Ask AI</span>
-                </label>
+                  </label>
+                  <span className="text-[11px] text-ink-muted">Press Enter or click Ask AI</span>
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -1491,41 +1589,44 @@ export const ReceptionistView: React.FC = () => {
                         handleAskQuestion();
                       }
                     }}
-                    className="pulse-input flex-1"
-                    placeholder="Ask anything, e.g. What doctors are available today? or When is Dr. Rajesh Sharma free?"
+                    className="flex-1 px-4 py-2.5 bg-paper-2 rounded-xl border border-rule focus:border-accent focus:ring-2 focus:ring-accent/20 text-sm text-ink placeholder:text-ink-muted/60 transition-all outline-none"
+                    placeholder="Ask your query, e.g. What doctors are available today? or When is Dr. Rajesh Sharma free?"
                   />
                   <button
                     type="button"
                     onClick={() => handleAskQuestion()}
                     disabled={isProcessing || !symptoms.trim()}
-                    className="pulse-btn pulse-btn-primary pulse-btn-sm text-xs font-mono px-3.5 whitespace-nowrap disabled:opacity-50 flex items-center space-x-1"
+                    className="px-5 py-2.5 rounded-xl bg-accent hover:bg-accent-hover text-white text-xs sm:text-sm font-semibold shadow-sm flex items-center space-x-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer"
                   >
                     {isProcessing ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <>
                         <span>Ask AI</span>
-                        <ArrowRight className="w-3 h-3" />
+                        <ArrowRight className="w-4 h-4" />
                       </>
                     )}
                   </button>
                 </div>
               </div>
+
+              {/* Clinical Safety Disclaimer */}
+              <div className="p-3 rounded-xl bg-paper-subtle border border-rule text-xs text-ink-muted flex items-start space-x-2.5 leading-relaxed">
+                <Shield className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <span>Administrative safety rules: AI handles doctor scheduling only. It does not diagnose, prescribe, or provide clinical triage.</span>
+              </div>
             </div>
 
-            {/* Clinical Safety Disclaimer */}
-            <div className="mt-2 p-2.5 rounded-lg bg-paper-subtle border border-rule text-[11px] font-mono text-ink-muted flex items-start space-x-2">
-              <Shield className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
-              <span>Administrative safety rules: AI handles doctor scheduling only. It does not diagnose, prescribe, or provide clinical triage.</span>
-            </div>
           </div>
         </div>
 
-        {/* Right Column: AI Routing, Doctor Slot Lookup & Atomic Booking */}
+        {/* Right Column: AI Routing, Doctor Slot Lookup & Atomic Booking (Image 5) */}
         <div className="lg:col-span-6 space-y-6">
-          <div className="pulse-card space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="pulse-h4 text-sm flex items-center space-x-2 text-ink">
+          <div className="pulse-card p-6 rounded-2xl bg-paper-2 border border-rule shadow-sm space-y-6">
+            
+            {/* Header with Emergency Toggle */}
+            <div className="flex items-center justify-between pb-3 border-b border-rule-subtle">
+              <h3 className="text-base font-bold text-ink flex items-center space-x-2">
                 <Calendar className="w-4 h-4 text-accent" />
                 <span>Doctor Routing & Verified OPD Slots</span>
               </h3>
@@ -1536,10 +1637,10 @@ export const ReceptionistView: React.FC = () => {
                   setEmergencyFallback(null);
                   setSpeechError(null);
                 }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                   isEmergencyMode
-                    ? 'bg-emergency text-white shadow-dropdown ring-2 ring-emergency/30'
-                    : 'bg-paper-2 border border-rule text-ink-2 hover:border-emergency hover:text-emergency'
+                    ? 'bg-emergency text-white shadow-sm ring-2 ring-emergency/30'
+                    : 'bg-paper-subtle border border-rule text-ink-2 hover:border-emergency hover:text-emergency'
                 }`}
                 title="Toggle Emergency Mode for one-click doctor allocation"
               >
@@ -1553,16 +1654,16 @@ export const ReceptionistView: React.FC = () => {
               <motion.div
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3 bg-emergency/10 border border-emergency/30 rounded-xl space-y-1.5"
+                className="p-3.5 bg-emergency/10 border border-emergency/30 rounded-xl space-y-1.5"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono font-bold text-emergency flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-emergency flex items-center gap-1.5">
                     <Zap className="w-3.5 h-3.5 animate-pulse text-emergency" />
                     FAST-TRACK EMERGENCY ONE-CLICK APPOINTMENT
                   </span>
-                  <span className="pulse-badge pulse-badge-red text-[9px] py-0">Auto-Allocation</span>
+                  <span className="pulse-badge pulse-badge-red text-[10px] py-0.5">Auto-Allocation</span>
                 </div>
-                <p className="text-[11px] font-mono text-ink-2">
+                <p className="text-xs text-ink-2 leading-relaxed">
                   One-click triage automatically finds the earliest available specialist slot in real time. No manual doctor browsing or slot picking required.
                 </p>
               </motion.div>
@@ -1571,32 +1672,36 @@ export const ReceptionistView: React.FC = () => {
             {/* 1. Department Selection */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="pulse-label">
+                <label className="text-xs font-semibold text-ink uppercase tracking-wider">
                   1. Select Department:
                 </label>
-                <span className="text-[10px] font-mono text-ink-muted">
+                <span className="text-[11px] font-medium text-ink-muted">
                   {displayDepartments.length} Medical Specialties
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {displayDepartments.map((dept) => (
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    whileHover={{ scale: 1.01 }}
-                    key={dept}
-                    onClick={() => handleSelectDepartment(dept)}
-                    className={`py-2 px-3 text-xs font-mono rounded-lg border text-left transition-colors flex items-center justify-between ${
-                      selectedDepartment.toLowerCase() === dept.toLowerCase()
-                        ? 'bg-accent-light border-accent text-accent font-bold shadow-hairline'
-                        : 'bg-paper-2 border-rule text-ink-2 hover:border-ink-muted'
-                    }`}
-                  >
-                    <span>{dept}</span>
-                    {selectedDepartment.toLowerCase() === dept.toLowerCase() && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                    )}
-                  </motion.button>
-                ))}
+              <div className="grid grid-cols-2 gap-2.5">
+                {displayDepartments.map((dept) => {
+                  const isSelected = selectedDepartment.toLowerCase() === dept.toLowerCase();
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ scale: 1.01 }}
+                      key={dept}
+                      type="button"
+                      onClick={() => handleSelectDepartment(dept)}
+                      className={`py-2.5 px-3.5 text-xs sm:text-sm rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-accent-light/50 border-accent text-accent font-bold shadow-xs ring-2 ring-accent/20'
+                          : 'bg-paper-2 border-rule text-ink hover:border-accent/40 hover:bg-paper-subtle'
+                      }`}
+                    >
+                      <span>{dept}</span>
+                      {isSelected && (
+                        <span className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />
+                      )}
+                    </motion.button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1607,16 +1712,16 @@ export const ReceptionistView: React.FC = () => {
                 className="p-4 rounded-xl border border-emergency/30 bg-emergency/5 space-y-3"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono font-bold text-emergency flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-emergency flex items-center gap-1.5">
                     <Zap className="w-3.5 h-3.5 animate-pulse text-emergency" />
                     Automated Priority Triage
                   </span>
-                  <span className="pulse-badge pulse-badge-red text-[9px] py-0">Fast-Track OPD Allocation</span>
+                  <span className="pulse-badge pulse-badge-red text-[10px] py-0.5">Fast-Track OPD Allocation</span>
                 </div>
-                <p className="text-xs font-mono text-ink-2">
+                <p className="text-xs text-ink-2 leading-relaxed">
                   System will automatically query real database doctors in <strong>{selectedDepartment}</strong>, identify the earliest available urgent slot, and lock it in one atomic transaction.
                 </p>
-                <div className="p-3 bg-paper rounded-lg border border-rule text-[11px] font-mono space-y-1.5">
+                <div className="p-3 bg-paper rounded-xl border border-rule text-xs space-y-1.5 font-mono">
                   <div className="flex items-center justify-between">
                     <span className="text-ink-muted">Target Specialty:</span>
                     <strong className="text-ink">{selectedDepartment}</strong>
@@ -1639,261 +1744,263 @@ export const ReceptionistView: React.FC = () => {
               <>
                 {/* 2. Real Doctor Selection */}
                 <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="pulse-label">
-                  2. Select Doctor ({selectedDepartment}):
-                </label>
-                <span className="text-[10px] font-mono text-ink-muted">
-                  {loadingDoctors ? 'Loading...' : `${departmentDoctors.length} Specialists`}
-                </span>
-              </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
+                      2. Select Doctor ({selectedDepartment}):
+                    </label>
+                    <span className="text-[11px] font-medium text-ink-muted">
+                      {loadingDoctors ? 'Loading...' : `${departmentDoctors.length} Specialists`}
+                    </span>
+                  </div>
 
-              {loadingDoctors ? (
-                <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule flex items-center space-x-2 text-xs font-mono text-ink-muted">
-                  <Loader2 className="w-4 h-4 animate-spin text-accent" />
-                  <span>Loading doctors from database...</span>
+                  {loadingDoctors ? (
+                    <div className="p-4 bg-paper-subtle rounded-xl border border-rule flex items-center space-x-2 text-xs font-medium text-ink-muted">
+                      <Loader2 className="w-4 h-4 animate-spin text-accent" />
+                      <span>Loading doctors from database...</span>
+                    </div>
+                  ) : departmentDoctors.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {departmentDoctors.map((doc) => {
+                        const isSelected = selectedDoctorId === doc.doctor_id;
+                        return (
+                          <motion.div
+                            key={doc.doctor_id}
+                            whileHover={{ scale: 1.01 }}
+                            whileTap={{ scale: 0.99 }}
+                            onClick={() => handleSelectDoctor(doc.doctor_id)}
+                            className={`p-3.5 sm:p-4 rounded-xl border cursor-pointer transition-all ${
+                              isSelected
+                                ? 'bg-accent-light/40 border-accent shadow-xs ring-2 ring-accent/20'
+                                : 'bg-paper-subtle border-rule hover:border-accent/40 hover:bg-paper-2'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className={`text-sm font-bold ${isSelected ? 'text-accent' : 'text-ink'}`}>
+                                    {doc.name}
+                                  </h4>
+                                  {isSelected && (
+                                    <span className="px-2 py-0.5 rounded-full bg-accent text-white text-[10px] font-bold">
+                                      Selected
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-ink-2 font-medium mt-0.5">
+                                  {doc.specialization || doc.specialty || doc.department_name}
+                                </p>
+                                <div className="flex items-center gap-3 mt-1.5 text-xs text-ink-muted">
+                                  <span>Room: <strong className="text-ink font-semibold">{doc.room_number || 'OPD 101'}</strong></span>
+                                  <span>·</span>
+                                  <span>Fee: <strong className="text-ink font-semibold">₹{doc.consultation_fee || 500}</strong></span>
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  Live Slots
+                                </span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-paper-subtle rounded-xl border border-rule text-xs text-ink-muted">
+                      No specialists found for {selectedDepartment}. Backend may be unreachable.
+                    </div>
+                  )}
                 </div>
-              ) : departmentDoctors.length > 0 ? (
-                <div className="space-y-2">
-                  {departmentDoctors.map((doc) => {
-                    const isSelected = selectedDoctorId === doc.doctor_id;
-                    return (
-                      <motion.div
-                        key={doc.doctor_id}
-                        whileHover={{ scale: 1.01 }}
-                        whileTap={{ scale: 0.99 }}
-                        onClick={() => handleSelectDoctor(doc.doctor_id)}
-                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-accent-light/40 border-accent shadow-hairline ring-1 ring-accent/30'
-                            : 'bg-paper-subtle border-rule hover:border-ink-muted'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className={`text-sm font-semibold ${isSelected ? 'text-accent font-bold' : 'text-ink'}`}>
-                                {doc.name}
-                              </h4>
-                              {isSelected && (
-                                <span className="pulse-badge pulse-badge-green text-[9px] py-0 px-1.5">
-                                  Selected
+
+                {/* 3. Date Selection */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
+                      3. Select Appointment Date:
+                    </label>
+                    <div className="flex items-center gap-1 text-xs font-semibold text-accent">
+                      <Calendar className="w-3.5 h-3.5" />
+                      <span>{formatDisplayDate(selectedDate)}</span>
+                    </div>
+                  </div>
+
+                  {/* Quick Date Chips */}
+                  <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                    {upcomingDates.map((item) => {
+                      const isSelected = selectedDate === item.iso;
+                      return (
+                        <motion.button
+                          whileTap={{ scale: 0.95 }}
+                          key={item.iso}
+                          type="button"
+                          onClick={() => handleSelectDate(item.iso)}
+                          className={`flex-shrink-0 px-3.5 py-2 rounded-xl border text-center transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-accent border-accent text-white font-bold shadow-sm ring-2 ring-accent/20'
+                              : 'bg-paper-2 border-rule text-ink hover:border-accent/40 hover:bg-paper-subtle'
+                          }`}
+                        >
+                          <div className="text-xs font-semibold">{item.label}</div>
+                          <div className={`text-[10px] mt-0.5 ${isSelected ? 'text-white/80' : 'text-ink-muted'}`}>
+                            {item.subLabel}
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Date Input for manual picking */}
+                  <div className="mt-2.5 flex items-center justify-between gap-2 p-2.5 bg-paper-subtle rounded-xl border border-rule text-xs">
+                    <span className="text-ink-muted flex items-center gap-1.5 font-medium">
+                      <Calendar className="w-3.5 h-3.5 text-ink-muted" />
+                      Custom Date:
+                    </span>
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      min={getLocalIsoDate()}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleSelectDate(e.target.value);
+                        }
+                      }}
+                      className="bg-paper-2 border border-rule rounded-lg px-2.5 py-1 text-xs font-medium text-ink focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                </div>
+
+                {/* 4. Slot Selection with Available vs Booked distinction */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-ink uppercase tracking-wider">
+                      4. Select Time Slot:
+                    </label>
+                    <div className="flex items-center gap-2 text-xs">
+                      {loadingSlots ? (
+                        <span className="text-ink-muted flex items-center gap-1 font-medium">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" /> Loading slots...
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted flex items-center gap-2 font-medium">
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            {slotCounts.available} Available
+                          </span>
+                          <span>·</span>
+                          <span className="inline-flex items-center gap-1 text-ink-muted">
+                            <Lock className="w-3 h-3" />
+                            {slotCounts.booked} Booked
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {detailedSlots.length > 0 && slotCounts.available === 0 && (
+                    <div className="p-3 mb-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1 text-xs">
+                      <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-bold">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>All slots fully reserved for {formatDisplayDate(selectedDate)}</span>
+                      </div>
+                      <p className="text-ink-2 text-xs">
+                        Pick another date above or use Fast-Track Emergency Allocation below.
+                      </p>
+                    </div>
+                  )}
+
+                  {detailedSlots.length > 0 ? (
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {detailedSlots.map((slot) => {
+                        const isSelected = selectedSlot === slot.display_time;
+                        const isAvailable = slot.available;
+
+                        return (
+                          <motion.button
+                            key={slot.slot_id}
+                            type="button"
+                            disabled={!isAvailable}
+                            whileTap={isAvailable ? { scale: 0.96 } : undefined}
+                            whileHover={isAvailable ? { scale: 1.02 } : undefined}
+                            onClick={() => {
+                              if (isAvailable) {
+                                setSelectedSlot(slot.display_time);
+                                setSelectedSlotId(slot.slot_id);
+                              }
+                            }}
+                            className={`py-2.5 px-2 text-xs rounded-xl border text-center transition-all tabular-nums relative cursor-pointer ${
+                              !isAvailable
+                                ? 'bg-paper-subtle/80 border-dashed border-rule text-ink-muted/50 cursor-not-allowed line-through select-none'
+                                : isSelected
+                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-200 font-bold shadow-xs ring-2 ring-emerald-500/30'
+                                : 'bg-paper-2 border-rule text-ink hover:border-emerald-500/50 hover:bg-paper-subtle'
+                            }`}
+                          >
+                            <div className="font-bold text-xs sm:text-sm">{slot.display_time}</div>
+                            <div className="text-[10px] mt-0.5">
+                              {isAvailable ? (
+                                <span className={isSelected ? 'text-emerald-700 dark:text-emerald-300 font-bold' : 'text-emerald-600 dark:text-emerald-400 font-medium'}>
+                                  ● Open
+                                </span>
+                              ) : (
+                                <span className="text-ink-muted flex items-center justify-center gap-0.5">
+                                  <Lock className="w-2.5 h-2.5" /> Booked
                                 </span>
                               )}
                             </div>
-                            <p className="text-xs font-mono text-ink-2 mt-0.5">
-                              {doc.specialization || doc.specialty || doc.department_name}
-                            </p>
-                            <div className="flex items-center gap-3 mt-1.5 text-[11px] font-mono text-ink-muted">
-                              <span>Room: <strong className="text-ink font-semibold">{doc.room_number || 'OPD 101'}</strong></span>
-                              <span>·</span>
-                              <span>Fee: <strong className="text-ink font-semibold">₹{doc.consultation_fee || 500}</strong></span>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              Live Slots
-                            </span>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="p-3.5 bg-paper-subtle rounded-xl border border-rule text-xs font-mono text-ink-muted">
-                  No specialists found for {selectedDepartment}. Backend may be unreachable.
-                </div>
-              )}
-            </div>
-
-            {/* 3. Date Selection */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="pulse-label">
-                  3. Select Appointment Date:
-                </label>
-                <div className="flex items-center gap-1 text-[10px] font-mono text-accent">
-                  <Calendar className="w-3 h-3" />
-                  <span>{formatDisplayDate(selectedDate)}</span>
-                </div>
-              </div>
-
-              {/* Quick Date Chips */}
-              <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-                {upcomingDates.map((item) => {
-                  const isSelected = selectedDate === item.iso;
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.95 }}
-                      key={item.iso}
-                      type="button"
-                      onClick={() => handleSelectDate(item.iso)}
-                      className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg border text-center transition-all ${
-                        isSelected
-                          ? 'bg-accent border-accent text-white font-bold shadow-hairline'
-                          : 'bg-paper-2 border-rule text-ink-2 hover:border-ink-muted'
-                      }`}
-                    >
-                      <div className="text-[11px] font-mono font-semibold">{item.label}</div>
-                      <div className={`text-[9px] font-mono ${isSelected ? 'text-white/80' : 'text-ink-muted'}`}>
-                        {item.subLabel}
-                      </div>
-                    </motion.button>
-                  );
-                })}
-              </div>
-
-              {/* Custom Date Input for manual picking */}
-              <div className="mt-2 flex items-center justify-between gap-2 p-2 bg-paper-subtle rounded-lg border border-rule text-xs font-mono">
-                <span className="text-ink-muted flex items-center gap-1">
-                  <Calendar className="w-3 h-3 text-ink-muted" />
-                  Custom Date:
-                </span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  min={getLocalIsoDate()}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      handleSelectDate(e.target.value);
-                    }
-                  }}
-                  className="bg-paper border border-rule rounded px-2 py-0.5 text-xs font-mono text-ink focus:outline-none focus:border-accent"
-                />
-              </div>
-            </div>
-
-            {/* 4. Slot Selection with Available vs Booked distinction */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="pulse-label">
-                  4. Select Time Slot:
-                </label>
-                <div className="flex items-center gap-2 text-[10px] font-mono">
-                  {loadingSlots ? (
-                    <span className="text-ink-muted flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin text-accent" /> Loading slots...
-                    </span>
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  ) : loadingSlots ? (
+                    <div className="flex items-center gap-2 text-xs font-medium text-ink-muted py-3">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+                      Fetching live availability from database...
+                    </div>
                   ) : (
-                    <span className="text-ink-muted flex items-center gap-1.5">
-                      <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        {slotCounts.available} Available
-                      </span>
-                      <span>·</span>
-                      <span className="inline-flex items-center gap-1 text-ink-muted">
-                        <Lock className="w-2.5 h-2.5" />
-                        {slotCounts.booked} Booked
-                      </span>
-                    </span>
+                    <div className="text-xs text-ink-muted py-3.5 px-4 bg-paper-subtle rounded-xl border border-rule flex flex-col sm:flex-row items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-ink-muted shrink-0" />
+                        <span>No OPD slots scheduled for this date.</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const tomorrow = upcomingDates[1]?.iso;
+                          if (tomorrow) handleSelectDate(tomorrow);
+                        }}
+                        className="pulse-btn pulse-btn-sm text-xs border border-rule hover:border-accent cursor-pointer"
+                      >
+                        Check Tomorrow →
+                      </button>
+                    </div>
                   )}
                 </div>
-              </div>
-
-              {detailedSlots.length > 0 && slotCounts.available === 0 && (
-                <div className="p-3 mb-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1 text-xs font-mono">
-                  <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-bold">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>All slots fully reserved for {formatDisplayDate(selectedDate)}</span>
-                  </div>
-                  <p className="text-ink-2 text-[11px]">
-                    Pick another date above or use Fast-Track Emergency Allocation below.
-                  </p>
-                </div>
-              )}
-
-              {detailedSlots.length > 0 ? (
-                <div className="grid grid-cols-3 gap-2">
-                  {detailedSlots.map((slot) => {
-                    const isSelected = selectedSlot === slot.display_time;
-                    const isAvailable = slot.available;
-
-                    return (
-                      <motion.button
-                        key={slot.slot_id}
-                        type="button"
-                        disabled={!isAvailable}
-                        whileTap={isAvailable ? { scale: 0.96 } : undefined}
-                        whileHover={isAvailable ? { scale: 1.02 } : undefined}
-                        onClick={() => {
-                          if (isAvailable) {
-                            setSelectedSlot(slot.display_time);
-                            setSelectedSlotId(slot.slot_id);
-                          }
-                        }}
-                        className={`py-2 px-2 text-[11px] font-mono rounded-lg border text-center transition-all tabular-nums relative ${
-                          !isAvailable
-                            ? 'bg-paper-subtle/80 border-dashed border-rule text-ink-muted/50 cursor-not-allowed line-through select-none'
-                            : isSelected
-                            ? 'bg-operational-light border-operational text-emerald-800 dark:text-emerald-300 font-bold shadow-hairline ring-2 ring-emerald-500/20'
-                            : 'bg-paper-2 border-rule text-ink hover:border-operational/50'
-                        }`}
-                      >
-                        <div className="font-semibold">{slot.display_time}</div>
-                        <div className="text-[9px] mt-0.5">
-                          {isAvailable ? (
-                            <span className={isSelected ? 'text-emerald-700 dark:text-emerald-300 font-bold' : 'text-emerald-600 dark:text-emerald-400'}>
-                              ● Open
-                            </span>
-                          ) : (
-                            <span className="text-ink-muted flex items-center justify-center gap-0.5">
-                              <Lock className="w-2 h-2" /> Booked
-                            </span>
-                          )}
-                        </div>
-                      </motion.button>
-                    );
-                  })}
-                </div>
-              ) : loadingSlots ? (
-                <div className="flex items-center gap-2 text-xs font-mono text-ink-muted py-3">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
-                  Fetching live availability from database...
-                </div>
-              ) : (
-                <div className="text-xs font-mono text-ink-muted py-3.5 px-4 bg-paper-subtle rounded-xl border border-rule flex flex-col sm:flex-row items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-ink-muted shrink-0" />
-                    <span>No OPD slots scheduled for this date.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const tomorrow = upcomingDates[1]?.iso;
-                      if (tomorrow) handleSelectDate(tomorrow);
-                    }}
-                    className="pulse-btn pulse-btn-sm text-[11px] font-mono border border-rule hover:border-accent"
-                  >
-                    Check Tomorrow →
-                  </button>
-                </div>
-              )}
-            </div>
-          </>
-        )}
+              </>
+            )}
 
             {/* 5. Booking Confirmation Preview Card */}
             {!isEmergencyMode && currentDoctor && selectedSlot && (
               <motion.div
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3 bg-accent-light/30 rounded-xl border border-accent/30 space-y-1.5"
+                className="p-3.5 bg-accent-light/40 rounded-xl border border-accent/30 space-y-1.5"
               >
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-ink-muted">Booking Selection:</span>
-                  <span className="pulse-badge pulse-badge-green text-[9px] py-0">Ready to Book</span>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-ink-muted font-medium">Booking Selection:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                    Ready to Book
+                  </span>
                 </div>
-                <div className="text-xs font-mono text-ink font-semibold flex items-center justify-between">
+                <div className="text-xs sm:text-sm text-ink font-bold flex items-center justify-between">
                   <span>{currentDoctor.name} ({currentDoctor.department_name})</span>
-                  <span className="text-accent font-bold">₹{currentDoctor.consultation_fee || 500}</span>
+                  <span className="text-accent font-extrabold">₹{currentDoctor.consultation_fee || 500}</span>
                 </div>
-                <div className="text-[11px] font-mono text-ink-2 flex items-center gap-2">
-                  <Calendar className="w-3 h-3 text-accent" />
+                <div className="text-xs text-ink-2 flex items-center gap-2 font-medium">
+                  <Calendar className="w-3.5 h-3.5 text-accent" />
                   <span>{formatDisplayDate(selectedDate)}</span>
                   <span>·</span>
-                  <Clock className="w-3 h-3 text-accent" />
+                  <Clock className="w-3.5 h-3.5 text-accent" />
                   <span className="font-bold text-accent">{selectedSlot}</span>
                   <span>·</span>
                   <span>{currentDoctor.room_number || 'OPD 101'}</span>
@@ -1909,7 +2016,7 @@ export const ReceptionistView: React.FC = () => {
                   whileTap={{ scale: 0.98 }}
                   onClick={handleEmergencyBookSlot}
                   disabled={isEmergencyBooking}
-                  className="pulse-btn w-full pulse-btn-lg text-xs bg-emergency hover:bg-emergency/90 text-white font-mono font-bold shadow-dropdown flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="w-full py-3.5 px-4 rounded-xl text-xs sm:text-sm bg-emergency hover:bg-emergency/90 text-white font-bold shadow-md flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {isEmergencyBooking ? (
                     <span className="flex items-center justify-center gap-2">
@@ -1931,7 +2038,7 @@ export const ReceptionistView: React.FC = () => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleBookSlot}
                     disabled={isBooking || !currentDoctor || !selectedSlot}
-                    className="pulse-btn pulse-btn-primary w-full pulse-btn-lg text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="pulse-btn pulse-btn-primary w-full py-3.5 rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                   >
                     {isBooking ? (
                       <span className="flex items-center justify-center gap-2">
@@ -1955,7 +2062,7 @@ export const ReceptionistView: React.FC = () => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleEmergencyBookSlot}
                     disabled={isEmergencyBooking}
-                    className="mt-2.5 pulse-btn w-full pulse-btn-sm text-xs bg-emergency/10 hover:bg-emergency text-emergency hover:text-white border border-emergency/40 font-mono font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                    className="mt-3 w-full py-2.5 px-4 rounded-xl text-xs sm:text-sm bg-emergency/10 hover:bg-emergency text-emergency hover:text-white border border-emergency/40 font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shadow-xs"
                     title="Direct 1-click allocation of earliest available emergency slot"
                   >
                     <Zap className="w-3.5 h-3.5" />
