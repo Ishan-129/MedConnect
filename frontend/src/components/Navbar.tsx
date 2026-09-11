@@ -42,9 +42,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="font-extrabold text-base sm:text-lg tracking-tight text-ink font-display">
                   MedConnect <span className="text-accent">Pulse</span>
                 </span>
-                <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase bg-accent-light text-accent border border-accent/25 rounded font-semibold">
-                  v2.0
-                </span>
               </div>
               <p className="text-[11px] text-ink-muted font-mono tracking-tight hidden sm:block">
                 Hospital AI Automation Engine
@@ -52,63 +49,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </div>
 
-          {/* Center Navigation: Portals Switcher */}
-          <nav className="hidden md:flex items-center space-x-1.5 relative">
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setActivePortal('landing')}
-              className={`relative px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                activePortal === 'landing' ? 'text-ink' : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              {activePortal === 'landing' && (
-                <motion.div
-                  layoutId="nav-pill-portal"
-                  className="absolute inset-0 bg-paper-subtle border border-rule shadow-hairline rounded-lg"
-                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                />
-              )}
-              <span className="relative z-10">Overview</span>
-            </motion.button>
-
-            {/* Patient Portal Switcher */}
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setActivePortal('patient')}
-              className={`relative flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                activePortal === 'patient' ? 'text-accent font-bold' : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              {activePortal === 'patient' && (
-                <motion.div
-                  layoutId="nav-pill-portal"
-                  className="absolute inset-0 bg-accent-light border border-accent/30 shadow-hairline rounded-lg"
-                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                />
-              )}
-              <UserCheck className="w-3.5 h-3.5 text-accent relative z-10" />
-              <span className="relative z-10">Patient Portal</span>
-            </motion.button>
-
-            {/* Hospital Portal (ED) Switcher */}
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setActivePortal('hospital')}
-              className={`relative flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                activePortal === 'hospital' ? 'text-emergency font-bold' : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              {activePortal === 'hospital' && (
-                <motion.div
-                  layoutId="nav-pill-portal"
-                  className="absolute inset-0 bg-emergency-light border border-emergency/30 shadow-hairline rounded-lg"
-                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                />
-              )}
-              <Radio className="w-3.5 h-3.5 text-emergency animate-pulse relative z-10" />
-              <span className="relative z-10">Hospital Portal (ED)</span>
-            </motion.button>
-          </nav>
 
           {/* Right Status & Active Auth Profile */}
           <div className="flex items-center space-x-3">
@@ -276,26 +216,16 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Mobile Portal Navigation Strip */}
-      <div className="md:hidden flex items-center justify-around border-t border-rule-subtle bg-paper-subtle px-2 py-2 overflow-x-auto">
-        <button
-          onClick={() => setActivePortal('landing')}
-          className={`px-2.5 py-1 text-xs font-mono rounded ${activePortal === 'landing' ? 'bg-paper-2 text-ink font-bold' : 'text-ink-muted'}`}
-        >
-          Overview
-        </button>
-        <button
-          onClick={() => setActivePortal('patient')}
-          className={`px-2.5 py-1 text-xs font-mono rounded ${activePortal === 'patient' ? 'bg-accent text-white font-bold' : 'text-ink-muted'}`}
-        >
-          Patient
-        </button>
-        <button
-          onClick={() => setActivePortal('hospital')}
-          className={`px-2.5 py-1 text-xs font-mono rounded ${activePortal === 'hospital' ? 'bg-emergency text-white font-bold' : 'text-ink-muted'}`}
-        >
-          Hospital (ED)
-        </button>
-      </div>
+      {activePortal !== 'landing' && (
+        <div className="md:hidden flex items-center justify-between border-t border-rule-subtle bg-paper-subtle px-4 py-2">
+          <button
+            onClick={() => setActivePortal('landing')}
+            className="px-2.5 py-1 text-xs font-mono rounded bg-paper-2 text-ink font-semibold shadow-hairline flex items-center space-x-1"
+          >
+            <span>← Back to Overview</span>
+          </button>
+        </div>
+      )}
     </header>
   );
 };
