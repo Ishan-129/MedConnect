@@ -207,12 +207,20 @@ async function processReceptionistTurnRaw(input) {
   const currentContext = { ...(input.context || {}) };
 
   // 1. Voice Speech-to-Text Pipeline (Sarvam STT) or direct text
-  let transcriptText = input.text?.trim() || '';
+  let transcriptText = '';
   let sttResult = null;
 
-  if (!transcriptText && input.audioBlob) {
+  // When audio payload is provided (microphone turn), ALWAYS prioritize Sarvam AI Indic STT
+  if (input.audioBlob) {
     sttResult = await transcribeAudio(input.audioBlob, input.language || 'Hinglish');
-    transcriptText = sttResult.text || '';
+    if (sttResult && sttResult.text) {
+      transcriptText = sttResult.text.trim();
+    }
+  }
+
+  // Fallback to text provided if no audio or if audio transcription was empty
+  if (!transcriptText && input.text) {
+    transcriptText = input.text.trim();
   }
 
   if (!transcriptText) {
@@ -246,7 +254,10 @@ async function processReceptionistTurnRaw(input) {
     };
   }
 
-  // 2. Route Turn through n8n Workflow if requested or enabled
+  // 2. Extract Intent and Slots (Deterministic Indic & Multilingual NLP)
+  const extracted = await extractIntentAndSlots(transcriptText);
+
+  // 3. Route Turn through n8n Workflow if requested or enabled
   const isMultiTurn = Boolean(currentContext && (currentContext.stage || currentContext.pendingIntent));
   const shouldUseN8n = input.useN8n === true || input.routeViaN8n === true || process.env.ENABLE_N8N_ROUTING === 'true';
   if (shouldUseN8n && !isMultiTurn) {
@@ -258,19 +269,23 @@ async function processReceptionistTurnRaw(input) {
       language: input.language || 'Hinglish',
       hospitalId,
       context: currentContext,
-      patientName: currentContext.patientName || input.patientName || 'Patient',
-      patientPhone: currentContext.patientPhone || input.patientPhone || '+91 98765 43210',
+      patientName: currentContext.patientName || input.patientName || extracted.patientName || 'Patient',
+      patientPhone: currentContext.patientPhone || input.patientPhone || extracted.patientPhone || '+91 98765 43210',
+      extractedSlots: extracted,
+      intent: extracted.intent,
     }) : null;
 
-    if (n8nRes && (n8nRes.source === 'n8n' || n8nRes.executedBy === 'remote-n8n')) {
+    if (n8nRes && (n8nRes.source === 'n8n' || n8nRes.executedBy === 'remote-n8n' || n8nRes.executedBy === 'local-n8n')) {
       let actionPayload = n8nRes.actionPayload || n8nRes;
       const tokenNum = actionPayload?.token?.token_number || actionPayload?.token_number || actionPayload?.booking_result?.token_number;
       const isExplicitCancel = /\b(cancel|cancellation|radd|रद्द|hatao)\b/i.test(transcriptText);
       const isExplicitCheck = /\b(show|check|view|status|details)\b/i.test(transcriptText) && /\b(appointment|booking)\b/i.test(transcriptText);
       const isExplicitDues = /\b(dues|bill|fees|pending|payment)\b/i.test(transcriptText);
 
-      // If user is explicitly checking dues or appointments, bypass n8n misclassifications
-      if (isExplicitCheck || isExplicitDues || (n8nRes.intent === 'UNKNOWN' && (isExplicitCheck || isExplicitDues))) {
+      // If user is explicitly checking dues or appointments, or if n8n missed an actionable intent with generic INFORMATIONAL:
+      const isActionableIntentMiss = !tokenNum && (n8nRes.status === 'INFORMATIONAL' || n8nRes.intent === 'UNKNOWN') && extracted.intent !== 'UNKNOWN' && extracted.intent !== 'CAPABILITIES_QUERY';
+
+      if (isExplicitCheck || isExplicitDues || isActionableIntentMiss || (n8nRes.intent === 'UNKNOWN' && (isExplicitCheck || isExplicitDues))) {
         // Fall through to local state machine
       } else {
         const intent = isExplicitCancel ? 'CANCEL_APPOINTMENT' : (n8nRes.intent || (tokenNum ? 'BOOK_APPOINTMENT' : null));
@@ -561,6 +576,12 @@ async function processReceptionistTurnRaw(input) {
         return {
           success: n8nRes.success ?? true,
           status: n8nRes.status || 'ACTION_COMPLETED',
+          source: n8nRes.source || 'n8n',
+          executedBy: n8nRes.executedBy || 'n8n',
+          n8nTelemetry: n8nRes.n8nTelemetry || {
+            executedBy: n8nRes.executedBy || 'local-n8n',
+            endpoint: n8nRes.endpointUsed || 'local-engine',
+          },
           intent,
           transcript: transcriptText,
           aiMessage: enrichedAiMessage,
@@ -580,8 +601,7 @@ async function processReceptionistTurnRaw(input) {
   }
 }
 
-  // 3. Local Intent & Slot Extraction
-  const extracted = await extractIntentAndSlots(transcriptText);
+  // 4. Local Intent & Slot Extraction
   let intent = extracted.intent;
 
   if (intent === 'UNKNOWN' && currentContext.pendingIntent) {

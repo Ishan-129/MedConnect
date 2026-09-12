@@ -5,6 +5,7 @@ import { LandingPage } from './views/LandingPage';
 import { ReceptionistView } from './views/ReceptionistView';
 import { QueueView } from './views/QueueView';
 import { EmergencyView } from './views/EmergencyView';
+import { DispatchPassPortalView } from './views/DispatchPassPortalView';
 
 import { AnimatePresence, motion } from 'motion/react';
 import { pageTransitionVariants } from './lib/motionTokens';
@@ -15,6 +16,18 @@ import { AuthGate } from './components/AuthGate';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 function MainAppContent() {
+  const [hasDispatchPassLink, setHasDispatchPassLink] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      return (
+        p.get('dispatch_pass') === 'true' ||
+        p.has('dispatch_id') ||
+        window.location.pathname.startsWith('/dispatch')
+      );
+    }
+    return false;
+  });
+
   const [hasCheckInLink, setHasCheckInLink] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search);
@@ -45,6 +58,7 @@ function MainAppContent() {
   const [hospitalTab, setHospitalTab] = useState<'emergency' | 'queue'>('emergency');
 
   const handleSelectPortal = (portal: 'patient' | 'hospital', subView?: 'receptionist' | 'queue' | 'emergency') => {
+    setHasDispatchPassLink(false);
     setActivePortal(portal);
     if (portal === 'patient') {
       if (subView === 'queue') setPatientTab('queue');
@@ -56,6 +70,7 @@ function MainAppContent() {
   };
 
   const getActiveKey = () => {
+    if (hasDispatchPassLink) return 'dispatch-pass-portal';
     if (activePortal === 'landing') return 'landing';
     if (activePortal === 'patient') return `patient-${patientTab}`;
     return `hospital-${hospitalTab}`;
@@ -65,7 +80,10 @@ function MainAppContent() {
     <div className="min-h-screen flex flex-col bg-paper text-ink font-sans">
       <Navbar 
         activePortal={activePortal} 
-        setActivePortal={setActivePortal}
+        setActivePortal={(portal) => {
+          setHasDispatchPassLink(false);
+          setActivePortal(portal);
+        }}
         patientTab={patientTab}
         setPatientTab={setPatientTab}
         hospitalTab={hospitalTab}
@@ -83,34 +101,50 @@ function MainAppContent() {
             className="w-full"
           >
             <ErrorBoundary>
-              {activePortal === 'landing' && (
-                <LandingPage onSelectPortal={handleSelectPortal} />
-              )}
-
-              {activePortal === 'patient' && (
+              {hasDispatchPassLink ? (
+                <DispatchPassPortalView
+                  onOpenHospitalCenter={() => {
+                    setHasDispatchPassLink(false);
+                    setActivePortal('hospital');
+                    setHospitalTab('emergency');
+                  }}
+                  onBackToHome={() => {
+                    setHasDispatchPassLink(false);
+                    setActivePortal('landing');
+                  }}
+                />
+              ) : (
                 <>
-                  {patientTab === 'receptionist' && (
-                    <ReceptionistView onBackToHome={() => setActivePortal('landing')} />
+                  {activePortal === 'landing' && (
+                    <LandingPage onSelectPortal={handleSelectPortal} />
                   )}
-                  {patientTab === 'queue' && (
-                    hasCheckInLink ? (
-                      <QueueView defaultRole="patient" hideRoleSwitcher={true} />
-                    ) : (
-                      <AuthGate role="patient" title="Patient Queue & Token Tracker">
-                        <QueueView defaultRole="patient" hideRoleSwitcher={true} />
-                      </AuthGate>
-                    )
+
+                  {activePortal === 'patient' && (
+                    <>
+                      {patientTab === 'receptionist' && (
+                        <ReceptionistView onBackToHome={() => setActivePortal('landing')} />
+                      )}
+                      {patientTab === 'queue' && (
+                        hasCheckInLink ? (
+                          <QueueView defaultRole="patient" hideRoleSwitcher={true} />
+                        ) : (
+                          <AuthGate role="patient" title="Patient Queue & Token Tracker">
+                            <QueueView defaultRole="patient" hideRoleSwitcher={true} />
+                          </AuthGate>
+                        )
+                      )}
+                    </>
+                  )}
+
+                  {activePortal === 'hospital' && (
+                    <AuthGate role="hospital" title="Hospital Emergency & Desk Command Center">
+                      {hospitalTab === 'emergency' && <EmergencyView />}
+                      {hospitalTab === 'queue' && (
+                        <QueueView defaultRole="reception" hideRoleSwitcher={false} />
+                      )}
+                    </AuthGate>
                   )}
                 </>
-              )}
-
-              {activePortal === 'hospital' && (
-                <AuthGate role="hospital" title="Hospital Emergency & Desk Command Center">
-                  {hospitalTab === 'emergency' && <EmergencyView />}
-                  {hospitalTab === 'queue' && (
-                    <QueueView defaultRole="reception" hideRoleSwitcher={false} />
-                  )}
-                </AuthGate>
               )}
             </ErrorBoundary>
           </motion.div>

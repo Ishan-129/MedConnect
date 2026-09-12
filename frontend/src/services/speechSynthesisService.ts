@@ -645,7 +645,7 @@ export async function speakText(
 
   if (shouldTrySarvam) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1800); // Strict 1.8s timeout
+    const timeout = setTimeout(() => controller.abort(), 7000); // Production 7.0s timeout for cloud neural synthesis
 
     try {
       const res = await fetch('/api/sarvam/synthesize', {
@@ -670,20 +670,20 @@ export async function speakText(
           }
           console.warn('[speechSynthesis] Sarvam audio playback failed to start, falling back to Web Speech.');
         } else {
-          // If Sarvam explicitly reported quota exhaustion or failure, cache cooldown for 45s
+          // If Sarvam explicitly reported quota exhaustion, cache cooldown for 45s
           if (data.status === 'SARVAM_NO_CREDITS' || (data.error && data.error.includes('402'))) {
             sarvamTtsUnavailableUntil = Date.now() + 45000;
           }
         }
       } else {
-        if (res.status === 402 || res.status === 500) {
+        if (res.status === 402) {
           sarvamTtsUnavailableUntil = Date.now() + 45000;
         }
       }
     } catch (err) {
       clearTimeout(timeout);
-      // On network failure or abort, set short cooldown
-      sarvamTtsUnavailableUntil = Date.now() + 20000;
+      // Transient timeout or network jitter: only hold off for 5s
+      sarvamTtsUnavailableUntil = Date.now() + 5000;
       console.warn('[speechSynthesis] Sarvam TTS request failed or timed out, routing immediately to Web Speech:', err);
     }
   }

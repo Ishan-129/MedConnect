@@ -98,6 +98,14 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
   );
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContext>({});
+  const [n8nStatus, setN8nStatus] = useState<{
+    executedBy: string;
+    endpoint?: string;
+    status?: number;
+    correlationId?: string;
+    reason?: string;
+    mode?: string;
+  } | null>(null);
 
   // Doctor / slot / department state from live backend
   const [departments, setDepartments] = useState<string[]>([]);
@@ -628,6 +636,10 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
 
         setIsProcessing(false);
 
+        if (turnResponse.n8nTelemetry) {
+          setN8nStatus(turnResponse.n8nTelemetry);
+        }
+
         if (turnResponse.success || turnResponse.status === 'ACTION_COMPLETED' || turnResponse.status === 'NEEDS_MORE_INFO') {
           const finalWords = turnResponse.transcript || spokenText;
           if (finalWords) {
@@ -751,6 +763,10 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
       });
 
       setIsProcessing(false);
+
+      if (turnResponse.n8nTelemetry) {
+        setN8nStatus(turnResponse.n8nTelemetry);
+      }
 
       if (turnResponse.success || turnResponse.status === 'ACTION_COMPLETED' || turnResponse.status === 'NEEDS_MORE_INFO') {
         const finalWords = turnResponse.transcript || textToSend;
@@ -1150,7 +1166,42 @@ export const ReceptionistView: React.FC<ReceptionistViewProps> = ({ onBackToHome
             Multilingual Voice AI Receptionist
           </h1>
         </div>
+
+        {/* n8n Orchestration Badge */}
+        <div className="flex items-center space-x-2 bg-paper-subtle px-3 py-1.5 rounded-xl border border-rule font-mono text-xs shadow-hairline">
+          <span className={`w-2 h-2 rounded-full ${n8nStatus?.executedBy === 'remote-n8n' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+          <span className="text-ink-muted">n8n WF01 Engine:</span>
+          <strong className={n8nStatus?.executedBy === 'remote-n8n' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+            {n8nStatus?.executedBy === 'remote-n8n' ? 'Live Cloud Active' : 'Local Fallback'}
+          </strong>
+        </div>
       </div>
+
+      {/* n8n Live Telemetry Strip */}
+      {n8nStatus && (
+        <div className={`p-3 rounded-xl border font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-2 shadow-hairline ${
+          n8nStatus.executedBy === 'remote-n8n'
+            ? 'bg-emerald-500/5 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+            : 'bg-amber-500/5 border-amber-500/30 text-amber-800 dark:text-amber-300'
+        }`}>
+          <div className="flex items-center space-x-2">
+            <span className={`w-2 h-2 rounded-full ${n8nStatus.executedBy === 'remote-n8n' ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'}`} />
+            <span className="text-ink-muted">Workflow WF01:</span>
+            <strong>{n8nStatus.executedBy === 'remote-n8n' ? 'Live Remote Webhook' : 'Local Backup Engine'}</strong>
+            {n8nStatus.correlationId && (
+              <>
+                <span className="text-rule">|</span>
+                <span className="text-accent">{n8nStatus.correlationId}</span>
+              </>
+            )}
+          </div>
+          <div className="text-[11px] truncate max-w-xl">
+            {n8nStatus.executedBy === 'remote-n8n'
+              ? `Executed via ${n8nStatus.endpoint} (HTTP ${n8nStatus.status || 200})`
+              : (n8nStatus.reason || 'Remote n8n endpoint returned 404. Workflow WF01 must be toggled to ACTIVE in n8n.')}
+          </div>
+        </div>
+      )}
 
       {/* Patient Account Context Strip */}
       <div className="p-3 bg-paper-subtle rounded-xl border border-rule flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-mono text-xs shadow-hairline">

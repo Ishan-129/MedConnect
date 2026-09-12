@@ -45,7 +45,7 @@ export type ResourceType =
 
 export type EmergencyPriority = 'NORMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'URGENT' | 'EMERGENCY';
 
-export type EmergencyStatus = 'OPEN' | 'ACCEPTED' | 'DISPATCHED' | 'FULFILLED' | 'ESCALATED' | 'CANCELLED';
+export type EmergencyStatus = 'OPEN' | 'CREATED' | 'BROADCASTED' | 'ACCEPTED' | 'DISPATCHED' | 'FULFILLED' | 'COMPLETED' | 'ESCALATED' | 'CANCELLED';
 
 export interface Hospital {
   hospital_id: string;

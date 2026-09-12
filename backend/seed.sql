@@ -212,25 +212,6 @@ INSERT INTO resources (hospital_id, resource_type, quantity_available, quantity_
 ('55555555-5555-4555-a555-555555555555', 'VENTILATOR', 9, 1, 0),
 ('55555555-5555-4555-a555-555555555555', 'AMBULANCE', 6, 0, 0);
 
+-- 8. EMERGENCY REQUESTS (Empty by default - populated only via real hospital website alerts)
 -- ============================================================================
--- 8. SAMPLE EMERGENCY REQUEST (Safdarjung requesting 4 units O- Blood)
--- ============================================================================
-INSERT INTO emergency_requests (
-  request_id,
-  requesting_hospital_id,
-  resource_type,
-  quantity,
-  priority,
-  status,
-  created_at,
-  expires_at
-) VALUES (
-  'e0000001-0000-4000-a000-000000000001',
-  '22222222-2222-4222-a222-222222222222', -- Safdarjung Hospital
-  'O_NEG_BLOOD',
-  4,
-  'CRITICAL',
-  'OPEN',
-  now(),
-  now() + interval '30 minutes'
-);
+

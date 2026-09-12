@@ -61,6 +61,15 @@ export interface ReceptionistResponse {
   context?: ConversationContext;
   suggestedActions?: { label: string; text: string; icon?: string }[];
   error?: string;
+  executedBy?: 'remote-n8n' | 'local-n8n' | 'local-engine';
+  n8nTelemetry?: {
+    executedBy: string;
+    endpoint?: string;
+    status?: number;
+    correlationId?: string;
+    reason?: string;
+    mode?: string;
+  };
 }
 
 /**

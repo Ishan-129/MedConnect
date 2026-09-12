@@ -25,15 +25,26 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabaseClient';
 import { Hospital, EmergencyRequest, ResourceType, EmergencyPriority } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
-import { TransportationMap } from '../components/TransportationMap';
 import { HospitalRadarView } from '../components/HospitalRadarView';
 import { QRDispatchPassModal } from '../components/QRDispatchPassModal';
 import { AmbulanceVerificationModal } from '../components/AmbulanceVerificationModal';
-import { triggerEmergencyBroadcast, triggerEmergencyAccept, triggerEscalationCheck, generateCorrelationId } from '../lib/n8nClient';
+import { triggerEmergencyBroadcast, triggerEmergencyAccept, triggerEscalationCheck, triggerEmergencyDecline, generateCorrelationId } from '../lib/n8nClient';
 import { initiateTwilioVoiceCall } from '../services/twilioService';
 import { springs } from '../lib/motionTokens';
 import { useAuth } from '../context/AuthContext';
 import { calculateDistanceKm } from '../lib/haversine';
+
+const DEFAULT_HOSPITAL: Hospital = {
+  hospital_id: '11111111-1111-4111-a111-111111111111',
+  name: 'AIIMS New Delhi',
+  latitude: 28.5672,
+  longitude: 77.2100,
+  contact: '+91 11 2658 8500',
+  telegram_chat_id: '6537122486',
+  active_status: true,
+  supported_resources: ['BLOOD_O_NEG', 'ICU_BED', 'OXYGEN', 'VENTILATOR'],
+  distance_km: 0,
+};
 
 export const EmergencyView: React.FC = () => {
   const { activeHospital: authHospital, allHospitals, switchHospital, openAuthModal } = useAuth();
@@ -56,8 +67,19 @@ export const EmergencyView: React.FC = () => {
   }, [allHospitals, authHospital]);
 
   // Active viewing hospital (defaults to logged-in facility or first hospital from database)
-  const activeHospital: Hospital | null = useMemo(() => {
+  const activeHospital: Hospital = useMemo(() => {
     if (authHospital) {
+      const matched = hospitals.find(
+        (h) =>
+          h.hospital_id === authHospital.hospital_id ||
+          (authHospital.name && (
+            h.name.toLowerCase().includes(authHospital.name.toLowerCase().split(' ')[0]) ||
+            authHospital.name.toLowerCase().includes(h.name.toLowerCase().split(' ')[0])
+          ))
+      );
+      if (matched) {
+        return matched;
+      }
       return {
         hospital_id: authHospital.hospital_id,
         name: authHospital.name,
@@ -70,14 +92,35 @@ export const EmergencyView: React.FC = () => {
         distance_km: 0,
       };
     }
-    return hospitals[0] || null;
+    return hospitals[0] || DEFAULT_HOSPITAL;
   }, [authHospital, hospitals]);
+
+  // Check if a request belongs to the active hospital facility
+  const isFacilityRequester = useCallback(
+    (req: EmergencyRequest) => {
+      if (!req) return false;
+      if (
+        req.requesting_hospital_id &&
+        activeHospital?.hospital_id &&
+        req.requesting_hospital_id === activeHospital.hospital_id
+      ) {
+        return true;
+      }
+      const reqName = (req.requesting_hospital_name || '').toLowerCase();
+      const activeName = (activeHospital?.name || '').toLowerCase();
+      if (reqName && activeName) {
+        const activeWord = activeName.split(' ')[0];
+        const reqWord = reqName.split(' ')[0];
+        if (activeWord && reqName.includes(activeWord)) return true;
+        if (reqWord && activeName.includes(reqWord)) return true;
+      }
+      return false;
+    },
+    [activeHospital]
+  );
 
   // Feed tabs: 'incoming' (alerts from other hospitals), 'outgoing' (sent by you), 'all'
   const [feedFilter, setFeedFilter] = useState<'incoming' | 'outgoing' | 'all'>('incoming');
-
-  // View Mode: 'map' (Transportation Map) vs 'radar' (15km Haversine Radar)
-  const [mapMode, setMapMode] = useState<'map' | 'radar'>('map');
 
   // Real database emergency requests stream
   const [requests, setRequests] = useState<EmergencyRequest[]>([]);
@@ -107,6 +150,7 @@ export const EmergencyView: React.FC = () => {
   const [notes, setNotes] = useState('Polytrauma trauma center patient. Massive internal hemorrhage. Urgent O- transfusion needed.');
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [decliningId, setDecliningId] = useState<string | null>(null);
 
   // Live Diagnostic / n8n Telemetry Log
   const [lastN8nLog, setLastN8nLog] = useState<{
@@ -134,7 +178,20 @@ export const EmergencyView: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.requests) {
-          setRequests(data.requests);
+          setRequests((prev) => {
+            const serverReqs: EmergencyRequest[] = data.requests;
+            const serverIds = new Set(serverReqs.map((r) => r.request_id || r.id));
+
+            // Retain locally created broadcasts from the last 90s if not yet returned by server
+            const recentLocal = prev.filter((localReq) => {
+              const id = localReq.request_id || localReq.id;
+              if (serverIds.has(id)) return false;
+              const createdAt = new Date(localReq.created_at || Date.now()).getTime();
+              return Date.now() - createdAt < 90 * 1000;
+            });
+
+            return [...recentLocal, ...serverReqs];
+          });
         }
       }
     } catch (e) {
@@ -146,9 +203,8 @@ export const EmergencyView: React.FC = () => {
 
   // Load hospital inventory resources from database
   const loadHospitalResources = useCallback(async () => {
-    if (!activeHospital?.hospital_id) return;
     try {
-      const res = await fetch(`/api/resources?hospitalId=${activeHospital.hospital_id}`);
+      const res = await fetch('/api/resources');
       if (res.ok) {
         const data = await res.json();
         if (data.resources) {
@@ -158,7 +214,7 @@ export const EmergencyView: React.FC = () => {
     } catch (e) {
       console.warn('[EmergencyView] Error loading resources:', e);
     }
-  }, [activeHospital?.hospital_id]);
+  }, []);
 
   // Initial load, periodic polling, and Supabase Realtime subscription
   useEffect(() => {
@@ -188,26 +244,66 @@ export const EmergencyView: React.FC = () => {
     };
   }, [loadLiveEmergencyRequests, loadHospitalResources]);
 
-  // Ticking countdown
+  // Auto-sync Active Mission if accepted request exists in database
   useEffect(() => {
+    if (!activeMission && requests.length > 0) {
+      const acceptedReq = requests.find((r) => r.status === 'ACCEPTED');
+      if (acceptedReq) {
+        const supplyingHosp =
+          hospitals.find((h) => h.hospital_id === acceptedReq.supplying_hospital_id) ||
+          activeHospital;
+        const requestingHosp =
+          hospitals.find((h) => h.hospital_id === acceptedReq.requesting_hospital_id) ||
+          hospitals[0];
+
+        setActiveMission({
+          requestId: acceptedReq.request_id || acceptedReq.id || '',
+          donorHospital: supplyingHosp,
+          requesterHospital: requestingHosp,
+          resourceType: acceptedReq.resource_type,
+          quantity: acceptedReq.quantity,
+          deliveryStatus: 'DISPATCHED',
+          dispatchId: acceptedReq.dispatch_id || `DISP-${(acceptedReq.request_id || acceptedReq.id || '').slice(0, 8).toUpperCase()}`,
+          qrTokenHash: acceptedReq.qr_reference || 'PASS-CRYPT-VALID',
+        });
+      }
+    }
+  }, [requests, activeMission, hospitals, activeHospital]);
+
+  // Check if current facility has any active, unaccepted outgoing broadcast
+  const hasOpenBroadcast = useMemo(() => {
+    return requests.some((r) => {
+      const isMine = isFacilityRequester(r);
+      return isMine && (r.status === 'OPEN' || r.status === 'CREATED' || (r.status as any) === 'BROADCASTED');
+    });
+  }, [requests, isFacilityRequester]);
+
+  // Ticking countdown - only ticks down if there is an active unaccepted broadcast
+  useEffect(() => {
+    if (!hasOpenBroadcast) {
+      setCountdown(180);
+      return;
+    }
     const timer = setInterval(() => {
       setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [hasOpenBroadcast]);
 
   // Auto-escalate unfulfilled requests when 3-minute timer expires
   useEffect(() => {
-    if (countdown === 0) {
-      const openReq = requests.find((r) => r.status === 'OPEN');
+    if (countdown === 0 && hasOpenBroadcast) {
+      const openReq = requests.find((r) => {
+        return isFacilityRequester(r) && (r.status === 'OPEN' || r.status === 'CREATED' || (r.status as any) === 'BROADCASTED');
+      });
       if (openReq) {
         handleTriggerEscalation(openReq);
       }
     }
-  }, [countdown]);
+  }, [countdown, hasOpenBroadcast, requests, isFacilityRequester]);
 
   const handleTriggerEscalation = async (req?: EmergencyRequest) => {
-    const targetReq = req || requests.find((r) => r.status === 'OPEN') || requests[0];
+    const targetReq = req || requests.find((r) => r.status === 'OPEN' || r.status === 'CREATED' || (r.status as any) === 'BROADCASTED') || requests[0];
     if (!targetReq || isEscalating) return;
 
     setIsEscalating(true);
@@ -293,6 +389,7 @@ export const EmergencyView: React.FC = () => {
 
       setRequests((prev) => [savedReq, ...prev.filter(r => (r.request_id || r.id) !== (savedReq.request_id || savedReq.id))]);
       setCountdown(180);
+      setFeedFilter('outgoing');
 
       // 2. Trigger n8n regional broadcast in parallel
       triggerEmergencyBroadcast({
@@ -452,14 +549,21 @@ export const EmergencyView: React.FC = () => {
         ...activeMission,
         deliveryStatus: 'DELIVERED',
       });
-      // Mark request completed
+      // Mark request completed in local state
       setRequests((prev) =>
         prev.map((r) =>
-          r.request_id === activeMission.requestId
+          (r.request_id === activeMission.requestId || r.id === activeMission.requestId)
             ? { ...r, status: 'FULFILLED' }
             : r
         )
       );
+      // Persist to backend database
+      fetch('/api/emergency/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: activeMission.requestId, status: 'FULFILLED' }),
+      }).catch((e) => console.warn('[EmergencyView] Status update error:', e));
+
       setLastN8nLog({
         action: 'QR_STEP_2 | DELIVERY_HANDSHAKE',
         correlationId: generateCorrelationId(),
@@ -470,14 +574,97 @@ export const EmergencyView: React.FC = () => {
     }
   };
 
-  const handleDeclineRequest = (requestId: string) => {
-    setRequests((prev) => prev.filter((r) => r.request_id !== requestId));
+  const handleDeclineRequest = async (req: EmergencyRequest, hosp: Hospital | null) => {
+    if (!hosp) return;
+    const reqId = req.request_id || req.id || '';
+    setDecliningId(reqId);
+    try {
+      const res = await triggerEmergencyDecline({
+        request_id: reqId,
+        declining_hospital_id: hosp.hospital_id,
+        declining_hospital_name: hosp.name,
+        reason: 'OUT_OF_STOCK',
+      });
+
+      // Update local state with the decline and escalated status
+      setRequests((prev) =>
+        prev.map((r) => {
+          if (r.request_id === reqId || r.id === reqId) {
+            const prevDeclined = (r as any).declined_hospitals || [];
+            const prevIds = (r as any).declined_by_ids || [];
+            return {
+              ...r,
+              status: 'ESCALATED' as any,
+              is_cascaded: true,
+              last_declined_by: hosp.name,
+              declined_hospitals: [
+                ...prevDeclined,
+                { hospital_id: hosp.hospital_id, name: hosp.name, reason: 'OUT_OF_STOCK' },
+              ],
+              declined_by_ids: [...prevIds, hosp.hospital_id],
+            };
+          }
+          return r;
+        })
+      );
+
+      const cascadedCount = res.cascaded_to_count ?? Math.max(1, hospitals.length - 2);
+      const cascadedNames = res.cascaded_to && res.cascaded_to.length > 0
+        ? res.cascaded_to.map((h: any) => h.name).join(', ')
+        : 'Remaining Regional Network Facilities';
+
+      setLastN8nLog({
+        action: 'WF08_CASCADE | EMERGENCY ALERT RE-ROUTED',
+        correlationId: generateCorrelationId(),
+        status: 'ALERT CASCADED (STOCK UNAVAILABLE)',
+        time: new Date().toLocaleTimeString(),
+        detail: `${hosp.name} reported stock unavailable. Emergency requisition immediately cascaded to ${cascadedCount} regional hospitals (${cascadedNames}).`,
+      });
+
+      // Re-fetch live requests in background
+      setTimeout(() => loadLiveEmergencyRequests(), 600);
+    } catch (err: any) {
+      console.error('[EmergencyView] Decline error:', err);
+    } finally {
+      setDecliningId(null);
+    }
   };
 
   const handleCancelRequest = (requestId: string) => {
     setRequests((prev) =>
-      prev.map((r) => (r.request_id === requestId ? { ...r, status: 'CANCELLED' as any } : r))
+      prev.map((r) => ((r.request_id === requestId || r.id === requestId) ? { ...r, status: 'CANCELLED' as any } : r))
     );
+    fetch('/api/emergency/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, status: 'CANCELLED' }),
+    }).catch((e) => console.warn('[EmergencyView] Cancel error:', e));
+  };
+
+  const handleOpenQRPass = (req: EmergencyRequest) => {
+    const reqHosp = hospitals.find((h) => h.hospital_id === req.requesting_hospital_id) || {
+      name: req.requesting_hospital_name || 'Requesting Facility',
+    };
+    const suppId = req.supplying_hospital_id || (req as any).responding_hospital_id;
+    const suppHosp = hospitals.find((h) => h.hospital_id === suppId) || {
+      name: req.supplying_hospital_name || 'Supplying Facility',
+    };
+    const dispatchId = req.dispatch_id || `DISP-${(req.request_id || req.id || 'ACTIVE').substring(0, 8).toUpperCase()}`;
+    const qrHash = (req as any).qr_reference || (req as any).qr_token_hash || `PASS-TOKEN-${(req.request_id || req.id || '').substring(0, 8).toUpperCase()}`;
+
+    setQrPassData({
+      dispatch_id: dispatchId,
+      request_id: req.request_id || req.id || '',
+      donor_hospital_name: suppHosp.name,
+      requester_hospital_name: reqHosp.name,
+      resource_type: req.resource_type,
+      quantity: req.quantity,
+      qr_token_hash: qrHash,
+      issued_at: req.created_at || new Date().toISOString(),
+      expires_at: req.expires_at || req.timeout_at || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      status: req.status || 'ACCEPTED',
+    });
+    setShowQRModal(true);
   };
 
   if (!activeHospital) {
@@ -583,61 +770,28 @@ export const EmergencyView: React.FC = () => {
       {/* Main Grid: Left = Geospatial Map & Radar | Right = Broadcast & Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left Column: 15km Transportation Map & Proximity Radar */}
+        {/* Left Column: 15km Hospital Proximity Radar */}
         <div className="lg:col-span-7 space-y-6">
           
-          {/* Map / Radar Mode Toggle */}
-          <div className="flex items-center justify-between bg-paper-subtle p-1.5 rounded-xl border border-rule">
+          <div className="flex items-center justify-between bg-paper-subtle p-2 rounded-xl border border-rule">
             <div className="flex items-center space-x-2">
-              <button
-                onClick={() => setMapMode('map')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
-                  mapMode === 'map'
-                    ? 'bg-accent text-white shadow-md'
-                    : 'text-ink-muted hover:text-ink'
-                }`}
-              >
-                <Truck className="w-3.5 h-3.5" />
-                <span>Live Road Transit Map</span>
-              </button>
-              <button
-                onClick={() => setMapMode('radar')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
-                  mapMode === 'radar'
-                    ? 'bg-accent text-white shadow-md'
-                    : 'text-ink-muted hover:text-ink'
-                }`}
-              >
-                <Radio className="w-3.5 h-3.5" />
-                <span>15km Proximity Radar</span>
-              </button>
+              <Radio className="w-4 h-4 text-accent animate-pulse" />
+              <span className="text-xs font-mono font-bold text-ink">15km Hospital Proximity Radar</span>
             </div>
 
             <span className="text-[11px] font-mono text-ink-muted px-2">
-              Coverage: <strong className="text-operational">15.0 km Haversine</strong>
+              Coverage: <strong className="text-operational">{radiusKm.toFixed(1)} km Haversine</strong>
             </span>
           </div>
 
-          {/* Active View Container */}
-          {mapMode === 'map' ? (
-            <TransportationMap
-              requesterHospital={hospitals.find(h => h.hospital_id === requests[0]?.requesting_hospital_id) || activeHospital || hospitals[0]}
-              donorHospital={activeMission?.donorHospital || hospitals.find(h => h.hospital_id === requests[0]?.supplying_hospital_id) || null}
-              allHospitals={hospitals}
-              activeRequest={requests[0]}
-              deliveryStatus={activeMission?.deliveryStatus || 'PENDING'}
-              onVerifyPickup={() => setVerificationModal({ isOpen: true, type: 'PICKUP' })}
-              onVerifyDelivery={() => setVerificationModal({ isOpen: true, type: 'DELIVERY' })}
-            />
-          ) : (
-            <HospitalRadarView
-              selectedHospital={activeHospital}
-              allHospitals={hospitals}
-              radiusKm={radiusKm}
-              activeRequests={requests}
-              onSelectHospital={(h) => switchHospital(h.hospital_id)}
-            />
-          )}
+          {/* 15km Proximity Radar View */}
+          <HospitalRadarView
+            selectedHospital={activeHospital}
+            allHospitals={hospitals}
+            radiusKm={radiusKm}
+            activeRequests={requests}
+            onSelectHospital={(h) => switchHospital(h.hospital_id)}
+          />
 
           {/* Active Mission Card if Ambulance Dispatched */}
           {activeMission && (
@@ -712,6 +866,47 @@ export const EmergencyView: React.FC = () => {
                     Intake Restock
                   </span>
                 </div>
+              </div>
+
+              {/* Action Buttons for Active Mission Verification */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-rule-subtle font-mono text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowQRModal(true)}
+                  className="pulse-btn pulse-btn-secondary pulse-btn-sm flex items-center space-x-1.5"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>View Pass QR</span>
+                </button>
+
+                {activeMission.deliveryStatus === 'DISPATCHED' && (
+                  <button
+                    type="button"
+                    onClick={() => setVerificationModal({ isOpen: true, type: 'PICKUP' })}
+                    className="pulse-btn pulse-btn-primary pulse-btn-sm flex items-center space-x-1.5"
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>Scan Donor Pickup QR</span>
+                  </button>
+                )}
+
+                {activeMission.deliveryStatus === 'PICKED_UP' && (
+                  <button
+                    type="button"
+                    onClick={() => setVerificationModal({ isOpen: true, type: 'DELIVERY' })}
+                    className="pulse-btn pulse-btn-emergency pulse-btn-sm flex items-center space-x-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirm Trauma ER Intake</span>
+                  </button>
+                )}
+
+                {activeMission.deliveryStatus === 'DELIVERED' && (
+                  <span className="text-operational font-bold text-xs flex items-center space-x-1">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Intake Handshake Complete</span>
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -836,7 +1031,7 @@ export const EmergencyView: React.FC = () => {
                   <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
                     feedFilter === 'incoming' ? 'bg-white/20' : 'bg-paper-2'
                   }`}>
-                    {requests.filter(r => r.requesting_hospital_id !== activeHospital.hospital_id).length}
+                    {requests.filter(r => !isFacilityRequester(r)).length}
                   </span>
                 </button>
 
@@ -853,7 +1048,7 @@ export const EmergencyView: React.FC = () => {
                   <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
                     feedFilter === 'outgoing' ? 'bg-white/20' : 'bg-paper-2'
                   }`}>
-                    {requests.filter(r => r.requesting_hospital_id === activeHospital.hospital_id).length}
+                    {requests.filter(r => isFacilityRequester(r)).length}
                   </span>
                 </button>
 
@@ -874,13 +1069,14 @@ export const EmergencyView: React.FC = () => {
               <AnimatePresence mode="popLayout">
                 {requests
                   .filter((req) => {
-                    if (feedFilter === 'incoming') return req.requesting_hospital_id !== activeHospital.hospital_id;
-                    if (feedFilter === 'outgoing') return req.requesting_hospital_id === activeHospital.hospital_id;
+                    const isMine = isFacilityRequester(req);
+                    if (feedFilter === 'incoming') return !isMine;
+                    if (feedFilter === 'outgoing') return isMine;
                     return true;
                   })
                   .map((req) => {
-                    const isRequester = req.requesting_hospital_id === activeHospital.hospital_id;
-                    const isAccepted = req.status === 'ACCEPTED' || req.status === 'FULFILLED';
+                    const isRequester = isFacilityRequester(req);
+                    const isAccepted = req.status === 'ACCEPTED' || req.status === 'FULFILLED' || req.status === 'COMPLETED';
                     
                     // Haversine distance from current facility
                     const requestingHosp = hospitals.find((h) => h.hospital_id === req.requesting_hospital_id);
@@ -913,7 +1109,7 @@ export const EmergencyView: React.FC = () => {
                           <div>
                             <div className="flex items-center space-x-2">
                               <span className="font-bold text-ink">
-                                #{req.request_id.substring(0, 8)}
+                                #{(req.request_id || req.id || 'REQ').substring(0, 8)}
                               </span>
                               <StatusBadge status={req.status} />
 
@@ -947,6 +1143,31 @@ export const EmergencyView: React.FC = () => {
                           </strong>
                         </div>
 
+                        {/* Cascaded Alert Tracker for Requester */}
+                        {isRequester && (req as any).declined_hospitals && (req as any).declined_hospitals.length > 0 && (
+                          <div className="p-2.5 bg-amber-500/10 rounded-lg border border-amber-500/30 text-xs flex items-start space-x-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-amber-600 dark:text-amber-400">
+                                Stock Unavailable at {(req as any).declined_hospitals.map((d: any) => d.name).join(', ')}
+                              </span>
+                              <p className="text-[11px] text-ink-muted mt-0.5">
+                                Requisition automatically cascaded to remaining hospitals in 15km radar network.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Cascaded Alert Callout for Recipient */}
+                        {!isRequester && !isAccepted && (req as any).is_cascaded && !((req as any).declined_by_ids || []).includes(activeHospital?.hospital_id) && (
+                          <div className="p-2 bg-amber-500/15 rounded-lg border border-amber-500/40 text-xs flex items-center space-x-2 text-amber-700 dark:text-amber-300">
+                            <Zap className="w-4 h-4 text-amber-500 shrink-0 animate-pulse" />
+                            <span>
+                              <strong>CASCADED ALERT:</strong> Stock unavailable at {(req as any).last_declined_by || 'previous hospital'}. Requisition escalated to your facility!
+                            </span>
+                          </div>
+                        )}
+
                         {/* ========================================================================= */}
                         {/* ROLE-BASED ACTION CONTROLS */}
                         {/* ========================================================================= */}
@@ -961,7 +1182,7 @@ export const EmergencyView: React.FC = () => {
                                 </div>
                                 <div className="flex items-center space-x-2 shrink-0">
                                   <button
-                                    onClick={() => handleCancelRequest(req.request_id)}
+                                    onClick={() => handleCancelRequest(req.request_id || req.id || '')}
                                     className="text-[11px] font-mono text-ink-muted hover:text-emergency hover:underline"
                                   >
                                     Cancel SOS
@@ -975,12 +1196,10 @@ export const EmergencyView: React.FC = () => {
                               <div className="flex items-center justify-between w-full">
                                 <span className="text-operational font-bold flex items-center space-x-1 text-xs">
                                   <CheckCircle2 className="w-4 h-4 text-operational" />
-                                  <span>Accepted & Dispatched by {req.supplying_hospital_name}</span>
+                                  <span>Accepted & Dispatched by {req.supplying_hospital_name || hospitals.find(h => h.hospital_id === (req.supplying_hospital_id || (req as any).responding_hospital_id))?.name || 'Regional Facility'}</span>
                                 </span>
                                 <button
-                                  onClick={() => {
-                                    if (activeMission) setShowQRModal(true);
-                                  }}
+                                  onClick={() => handleOpenQRPass(req)}
                                   className="pulse-btn pulse-btn-sm pulse-btn-primary font-mono text-xs flex items-center space-x-1"
                                 >
                                   <QrCode className="w-3.5 h-3.5" />
@@ -990,19 +1209,29 @@ export const EmergencyView: React.FC = () => {
                             )}
                           </div>
                         ) : (
-                          /* RECIPIENT PERSPECTIVE: SHOW ACCEPT & SUPPLY / DECLINE */
+                          /* RECIPIENT PERSPECTIVE: SHOW ACCEPT & SUPPLY / DECLINE (NO STOCK) */
                           <div className="pt-2 flex items-center justify-between gap-2 border-t border-rule-subtle">
-                            {!isAccepted ? (
+                            {((req as any).declined_by_ids || []).includes(activeHospital?.hospital_id) ? (
+                              <div className="flex items-center justify-between w-full text-xs text-ink-muted">
+                                <span className="flex items-center space-x-1.5 font-mono">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                                  <span>Declined by Your Facility (Stock Unavailable) · Alert Cascaded to Regional Network</span>
+                                </span>
+                                <span className="pulse-badge pulse-badge-amber text-[10px] font-mono">CASCADED</span>
+                              </div>
+                            ) : !isAccepted ? (
                               <>
                                 <span className="text-[10px] text-ink-muted hidden sm:inline">
                                   Direct Telegram alert dispatched to your registered desk.
                                 </span>
                                 <div className="flex items-center space-x-2 ml-auto">
                                   <button
-                                    onClick={() => handleDeclineRequest(req.request_id)}
-                                    className="px-2.5 py-1 rounded-lg text-xs font-mono text-ink-muted hover:text-emergency hover:bg-paper-subtle transition-colors"
+                                    disabled={decliningId === (req.request_id || req.id)}
+                                    onClick={() => handleDeclineRequest(req, activeHospital)}
+                                    className="px-3 py-1 rounded-lg text-xs font-mono font-semibold text-emergency hover:bg-emergency-light/30 border border-emergency/30 transition-colors disabled:opacity-50"
+                                    title="Decline requisition if your facility lacks physical stock"
                                   >
-                                    Decline
+                                    {decliningId === (req.request_id || req.id) ? 'Cascading...' : 'DECLINE (NO STOCK)'}
                                   </button>
                                   <motion.button
                                     whileHover={{ scale: 1.02 }}
@@ -1013,7 +1242,7 @@ export const EmergencyView: React.FC = () => {
                                   >
                                     <CheckCircle2 className="w-3.5 h-3.5" />
                                     <span>
-                                      {isAccepting ? 'Locking...' : `ACCEPT & SUPPLY (${activeHospital.name.split(' ')[0]})`}
+                                      {isAccepting ? 'Locking...' : `ACCEPT & SUPPLY (${activeHospital?.name.split(' ')[0]})`}
                                     </span>
                                   </motion.button>
                                 </div>
@@ -1023,15 +1252,13 @@ export const EmergencyView: React.FC = () => {
                                 <span className="text-operational font-bold flex items-center space-x-1">
                                   <CheckCircle2 className="w-4 h-4 text-operational" />
                                   <span>
-                                    {req.supplying_hospital_id === activeHospital.hospital_id
+                                    {req.supplying_hospital_id === activeHospital?.hospital_id
                                       ? `Supplied by Your Desk! Stock Locked.`
-                                      : `Fulfilled by ${req.supplying_hospital_name}`}
+                                      : `Fulfilled by ${req.supplying_hospital_name || hospitals.find(h => h.hospital_id === (req.supplying_hospital_id || (req as any).responding_hospital_id))?.name || 'Nearby Facility'}`}
                                   </span>
                                 </span>
                                 <button
-                                  onClick={() => {
-                                    if (activeMission) setShowQRModal(true);
-                                  }}
+                                  onClick={() => handleOpenQRPass(req)}
                                   className="text-accent font-bold hover:underline flex items-center space-x-1"
                                 >
                                   <QrCode className="w-3.5 h-3.5" />
@@ -1048,8 +1275,9 @@ export const EmergencyView: React.FC = () => {
 
               {/* Empty state for filtered requests */}
               {requests.filter((req) => {
-                if (feedFilter === 'incoming') return req.requesting_hospital_id !== activeHospital.hospital_id;
-                if (feedFilter === 'outgoing') return req.requesting_hospital_id === activeHospital.hospital_id;
+                const isMine = isFacilityRequester(req);
+                if (feedFilter === 'incoming') return !isMine;
+                if (feedFilter === 'outgoing') return isMine;
                 return true;
               }).length === 0 && (
                 <div className="p-8 text-center bg-paper-subtle rounded-xl border border-rule font-mono text-xs text-ink-muted">
@@ -1067,7 +1295,7 @@ export const EmergencyView: React.FC = () => {
 
       </div>
 
-      {/* Regional Hospital Inventory Matrix (15km) */}
+      {/* Regional Hospital Network Matrix (15km) */}
       <div className="pulse-card space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
@@ -1075,7 +1303,7 @@ export const EmergencyView: React.FC = () => {
               Regional Healthcare Network Telemetry & 15km Proximity Grid
             </h3>
             <p className="pulse-text-muted text-xs">
-              Live capacity, blood bank reserves, and Haversine distance from {activeHospital?.name || 'Primary Facility'}.
+              Regional emergency response network within 15km Haversine radar. Critical stock is confirmed on-call upon dispatch.
             </p>
           </div>
           <span className="pulse-badge pulse-badge-green text-xs font-semibold">
@@ -1088,9 +1316,8 @@ export const EmergencyView: React.FC = () => {
             <thead>
               <tr>
                 <th>Hospital Facility</th>
-                <th>Trauma Level</th>
-                <th>Blood Reserves (O- / A+)</th>
-                <th>ICU Beds</th>
+                <th>Trauma & Emergency Capability</th>
+                <th>Direct Emergency Line</th>
                 <th>15km Proximity</th>
                 <th>Dispatch Readiness</th>
               </tr>
@@ -1113,19 +1340,19 @@ export const EmergencyView: React.FC = () => {
                       )}
                     </div>
                   </td>
-                  <td className="text-ink-2 font-mono text-xs">Level 1 Apex Trauma</td>
-                  <td className="tabular-nums font-mono font-semibold text-ink">
-                    <span className="text-emergency">O- (8 Units)</span> · <span className="text-operational">A+ (24 Units)</span>
-                  </td>
-                  <td className="tabular-nums font-mono font-medium text-operational">
-                    18 Beds Available
+                  <td className="text-ink-2 font-mono text-xs">Level 1 Apex Trauma & Resuscitation</td>
+                  <td className="tabular-nums font-mono text-xs text-ink-2">
+                    <div className="flex items-center space-x-1.5">
+                      <PhoneCall className="w-3.5 h-3.5 text-operational shrink-0" />
+                      <span>{hosp.contact || '+91-11-26594405'}</span>
+                    </div>
                   </td>
                   <td className="tabular-nums font-mono font-bold text-accent">
                     {hosp.distance_km?.toFixed(1) || '0.0'} km
                   </td>
                   <td>
-                    <span className="pulse-badge pulse-badge-green text-[11px]">
-                      Ready
+                    <span className="pulse-badge pulse-badge-green text-[11px] font-mono">
+                      <span className="pulse-dot pulse-dot-green"></span> Standby · Ready
                     </span>
                   </td>
                 </tr>
@@ -1151,6 +1378,8 @@ export const EmergencyView: React.FC = () => {
           onClose={() => setVerificationModal({ ...verificationModal, isOpen: false })}
           type={verificationModal.type}
           dispatchId={activeMission.dispatchId}
+          requestId={activeMission.requestId}
+          tokenHash={activeMission.qrTokenHash}
           donorHospitalName={activeMission.donorHospital.name}
           requesterHospitalName={activeMission.requesterHospital.name}
           resourceType={activeMission.resourceType}

@@ -125,8 +125,12 @@ export async function bookAppointment({
   // 5. Execute atomic booking
   const result = await db.bookAppointmentAtomic({
     patient_id: patient.patient_id,
+    patient_name: patient.name || patient.full_name || patientName,
+    patient_phone: patient.phone || patient.phone_number || cleanPhone,
     doctor_id: doctor.doctor_id,
+    doctor_name: doctor.name,
     department_id: deptId,
+    department_name: doctor.department_name,
     slot_id: selectedSlot.slot_id || selectedSlot.id,
     token,
   });

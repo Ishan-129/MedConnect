@@ -103,6 +103,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }));
         if (liveHospitals.length > 0) {
           setAllHospitals(liveHospitals);
+          setActiveHospital((prev) => {
+            if (!prev) return null;
+            const match = liveHospitals.find(
+              (h) =>
+                h.hospital_id === prev.hospital_id ||
+                (prev.name && (
+                  h.name.toLowerCase().includes(prev.name.toLowerCase().split(' ')[0]) ||
+                  prev.name.toLowerCase().includes(h.name.toLowerCase().split(' ')[0])
+                )) ||
+                (prev.contact_email && h.contact_email && h.contact_email.toLowerCase() === prev.contact_email.toLowerCase())
+            );
+            if (match) {
+              return {
+                ...prev,
+                hospital_id: match.hospital_id,
+                name: match.name,
+                latitude: match.latitude,
+                longitude: match.longitude,
+                contact: match.contact || prev.contact,
+                telegram_chat_id: match.telegram_chat_id || prev.telegram_chat_id,
+              };
+            }
+            return prev;
+          });
         }
       }
     } catch (e) {
@@ -126,18 +150,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const role = user.user_metadata?.role?.toLowerCase() || 'patient';
 
     if (role === 'hospital') {
+      const rawId = user.user_metadata?.hospital_id || user.id;
+      const rawName = user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.hospital_name || '';
+      const email = user.email || '';
+
+      const matched = allHospitals.find(
+        (h) =>
+          h.hospital_id === rawId ||
+          (rawName && (
+            h.name.toLowerCase().includes(rawName.toLowerCase().split(' ')[0]) ||
+            rawName.toLowerCase().includes(h.name.toLowerCase().split(' ')[0])
+          )) ||
+          (email && h.contact_email && h.contact_email.toLowerCase() === email.toLowerCase())
+      );
+
       const hospitalUser: HospitalUser = {
-        hospital_id: user.user_metadata?.hospital_id || user.id,
-        name: user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.hospital_name || 'Hospital Facility',
-        contact: user.user_metadata?.phone || user.user_metadata?.phone_number || user.user_metadata?.contact_phone || '',
-        telegram_chat_id: user.user_metadata?.telegram_chat_id || '6537122486',
-        latitude: user.user_metadata?.latitude || 28.5672,
-        longitude: user.user_metadata?.longitude || 77.21,
-        address: user.user_metadata?.address || 'New Delhi',
-        contact_email: user.email || '',
+        hospital_id: matched?.hospital_id || rawId,
+        name: matched?.name || rawName || 'Hospital Facility',
+        contact: matched?.contact || user.user_metadata?.phone || user.user_metadata?.contact_phone || '',
+        telegram_chat_id: matched?.telegram_chat_id || user.user_metadata?.telegram_chat_id || '6537122486',
+        latitude: matched?.latitude || user.user_metadata?.latitude || 28.5672,
+        longitude: matched?.longitude || user.user_metadata?.longitude || 77.21,
+        address: matched?.address || user.user_metadata?.address || 'New Delhi',
+        contact_email: matched?.contact_email || email,
         contact_person: user.user_metadata?.contact_person || 'Desk Officer',
         verification_status: 'VERIFIED',
-        supported_resources: [
+        supported_resources: matched?.supported_resources || [
           'O_NEG_BLOOD',
           'OXYGEN',
           'ICU_BED',

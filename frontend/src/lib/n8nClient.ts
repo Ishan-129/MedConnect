@@ -194,7 +194,12 @@ export async function triggerEmergencyBroadcast(payload: N8nBroadcastPayload): P
  * Trigger WF09: Emergency Accept & Lock Webhook
  */
 export async function triggerEmergencyAccept(payload: N8nAcceptPayload): Promise<N8nAcceptResponse> {
-  return postToN8n<N8nAcceptResponse>(N8N_ENDPOINTS.EMERGENCY_ACCEPT, payload);
+  const enriched = {
+    ...payload,
+    responding_hospital_id: payload.responding_hospital_id || (payload as any).supplying_hospital_id,
+    supplying_hospital_id: payload.responding_hospital_id || (payload as any).supplying_hospital_id,
+  };
+  return postToN8n<N8nAcceptResponse>(N8N_ENDPOINTS.EMERGENCY_ACCEPT, enriched);
 }
 
 /**
@@ -202,5 +207,28 @@ export async function triggerEmergencyAccept(payload: N8nAcceptPayload): Promise
  */
 export async function triggerEscalationCheck(payload: { request_id: string; hospital_name?: string; [key: string]: any }): Promise<any> {
   return postToN8n(N8N_ENDPOINTS.ESCALATION_CHECK, payload);
+}
+
+/**
+ * Trigger Emergency Decline & Alert Escalation
+ */
+export async function triggerEmergencyDecline(payload: {
+  request_id: string;
+  declining_hospital_id: string;
+  declining_hospital_name: string;
+  reason?: string;
+}): Promise<any> {
+  try {
+    const res = await fetch('/api/emergency/decline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    console.error('[n8nClient] triggerEmergencyDecline error:', err);
+    return { success: false, error: err.message };
+  }
 }
 

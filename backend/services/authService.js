@@ -110,7 +110,10 @@ export async function signup({
 
     // 2. Synchronize with respective database table
     let dbRecord = null;
-    if (role.toLowerCase() === 'hospital') {
+    const lowerName = name.trim().toLowerCase();
+    const isDeskStaff = lowerName.includes('reception') || lowerName.includes('desk') || lowerName.includes('staff');
+
+    if (role.toLowerCase() === 'hospital' && !isDeskStaff) {
       const { data: hospData, error: hospErr } = await supabaseAdmin
         .from('hospitals')
         .upsert([
@@ -132,6 +135,16 @@ export async function signup({
         console.warn('[authService] Note on hospital table sync:', hospErr.message);
       }
       dbRecord = hospData;
+
+      // Seed default emergency inventory for the new facility
+      const defaultResources = [
+        { hospital_id: userId, resource_type: 'OXYGEN_CYLINDER', total_quantity: 60, available_quantity: 50 },
+        { hospital_id: userId, resource_type: 'BLOOD_O_NEG', total_quantity: 20, available_quantity: 15 },
+        { hospital_id: userId, resource_type: 'ICU_BED', total_quantity: 12, available_quantity: 6 },
+        { hospital_id: userId, resource_type: 'VENTILATOR', total_quantity: 8, available_quantity: 5 },
+        { hospital_id: userId, resource_type: 'AMBULANCE', total_quantity: 4, available_quantity: 3 },
+      ];
+      supabaseAdmin.from('hospital_resources').upsert(defaultResources, { onConflict: 'hospital_id,resource_type' }).then(() => {}).catch(() => {});
     } else {
       // Patient table sync
       const patientCode = `PAT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -228,25 +241,67 @@ export async function login({ email, identifier, phone, password, role }) {
 
   let targetEmail = credential.toLowerCase();
 
-  // If user passed a phone number or identifier that isn't an email, lookup their registered email
+  // If user passed a phone number, hospital name, or ID that isn't an email, lookup their registered email
   if (!credential.includes('@')) {
     const cleanPhone = credential.replace(/[\s\-\(\)]/g, '');
-    
-    // Check in auth users list
-    const { data: userList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 100 });
-    const matchedUser = userList?.users?.find(u => {
-      const uPhone = (u.phone || u.user_metadata?.phone || u.user_metadata?.phone_number || '').replace(/[\s\-\(\)]/g, '');
-      const uName = (u.user_metadata?.full_name || u.user_metadata?.name || u.user_metadata?.hospital_name || '').toLowerCase();
-      return (cleanPhone && uPhone.includes(cleanPhone)) || (cleanPhone.length > 3 && uName.includes(cleanPhone.toLowerCase()));
-    });
+    const cleanCredLower = credential.toLowerCase().trim();
 
-    if (matchedUser?.email) {
-      targetEmail = matchedUser.email;
+    // 1. Direct known hospital identifier mapping
+    if (cleanCredLower.includes('aiims') || cleanPhone.includes('26588500')) {
+      targetEmail = 'aiims@hospital.gov.in';
+    } else if (cleanCredLower.includes('safdarjung') || cleanPhone.includes('26165060')) {
+      targetEmail = 'safdarjung@hospital.gov.in';
+    } else if (cleanCredLower.includes('max') || cleanPhone.includes('26515050')) {
+      targetEmail = 'max.saket@hospital.gov.in';
+    } else if (cleanCredLower.includes('fortis') || cleanPhone.includes('47135000')) {
+      targetEmail = 'fortis.okhla@hospital.gov.in';
+    } else if (cleanCredLower.includes('apollo') || cleanPhone.includes('26925858')) {
+      targetEmail = 'apollo.delhi@hospital.gov.in';
     } else {
-      const err = new Error(`No registered account found for identifier "${credential}".`);
-      err.code = 'USER_NOT_FOUND';
-      err.statusCode = 404;
-      throw err;
+      // 2. Query hospitals table in DB directly
+      try {
+        const { data: hospMatches } = await supabaseAdmin
+          .from('hospitals')
+          .select('*');
+
+        const matchedHosp = hospMatches?.find(h => 
+          (h.id && h.id === credential) ||
+          (h.hospital_id && h.hospital_id === credential) ||
+          (h.name && h.name.toLowerCase().includes(cleanCredLower)) ||
+          (h.contact_phone && h.contact_phone.replace(/[\s\-\(\)]/g, '').includes(cleanPhone))
+        );
+
+        if (matchedHosp) {
+          const hName = matchedHosp.name.toLowerCase();
+          if (hName.includes('aiims')) targetEmail = 'aiims@hospital.gov.in';
+          else if (hName.includes('safdarjung')) targetEmail = 'safdarjung@hospital.gov.in';
+          else if (hName.includes('max')) targetEmail = 'max.saket@hospital.gov.in';
+          else if (hName.includes('fortis')) targetEmail = 'fortis.okhla@hospital.gov.in';
+          else if (hName.includes('apollo')) targetEmail = 'apollo.delhi@hospital.gov.in';
+          else targetEmail = matchedHosp.contact_email || 'aiims@hospital.gov.in';
+        }
+      } catch (dbErr) {
+        // Continue to userList check
+      }
+    }
+
+    // 3. Fallback: Search in auth users list
+    if (!targetEmail.includes('@') || targetEmail === credential.toLowerCase()) {
+      const { data: userList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 100 });
+      const matchedUser = userList?.users?.find(u => {
+        const uPhone = (u.phone || u.user_metadata?.phone || u.user_metadata?.phone_number || '').replace(/[\s\-\(\)]/g, '');
+        const uName = (u.user_metadata?.full_name || u.user_metadata?.name || u.user_metadata?.hospital_name || '').toLowerCase();
+        return (cleanPhone && uPhone.includes(cleanPhone)) || (cleanPhone.length > 3 && uName.includes(cleanPhone.toLowerCase()));
+      });
+
+      if (matchedUser?.email) {
+        targetEmail = matchedUser.email;
+      } else {
+        const err = new Error(`No registered account found for identifier "${credential}".`);
+        err.code = 'USER_NOT_FOUND';
+        err.statusCode = 404;
+        throw err;
+      }
     }
   }
 
@@ -279,10 +334,27 @@ export async function login({ email, identifier, phone, password, role }) {
   if (userRole === 'hospital') {
     const { data: h } = await supabaseAdmin.from('hospitals').select('*').eq('id', user.id).maybeSingle();
     profile = h;
+    if (!profile) {
+      const { data: allH } = await supabaseAdmin.from('hospitals').select('*');
+      if (allH && allH.length > 0) {
+        const uEmail = (user.email || '').toLowerCase();
+        const uName = (user.user_metadata?.full_name || user.user_metadata?.name || '').toLowerCase();
+        profile = allH.find(h =>
+          (uEmail.includes('aiims') && h.name.toLowerCase().includes('aiims')) ||
+          (uEmail.includes('safdarjung') && h.name.toLowerCase().includes('safdarjung')) ||
+          (uEmail.includes('max') && h.name.toLowerCase().includes('max')) ||
+          (uEmail.includes('fortis') && h.name.toLowerCase().includes('fortis')) ||
+          (uEmail.includes('apollo') && h.name.toLowerCase().includes('apollo')) ||
+          (uName && h.name.toLowerCase().includes(uName.split(' ')[0]))
+        ) || allH[0];
+      }
+    }
   } else {
     const { data: p } = await supabaseAdmin.from('patients').select('*').eq('id', user.id).maybeSingle();
     profile = p;
   }
+
+  const resolvedHospitalId = profile ? (profile.id || profile.hospital_id) : (user.user_metadata?.hospital_id || user.id);
 
   return {
     success: true,
@@ -295,8 +367,9 @@ export async function login({ email, identifier, phone, password, role }) {
       expires_in: data.session.expires_in,
     },
     user: {
-      id: user.id,
+      id: resolvedHospitalId,
       user_id: user.id,
+      hospital_id: resolvedHospitalId,
       patient_id: user.id,
       email: user.email,
       role: userRole,
@@ -389,6 +462,33 @@ export async function seedAuthUsers() {
       id: '22222222-2222-4222-a222-222222222222',
       telegram_chat_id: '6537122486',
       address: 'Ring Road, Opposite AIIMS, New Delhi, Delhi 110029',
+    },
+    {
+      email: 'max.saket@hospital.gov.in',
+      password: 'medconnect123',
+      role: 'hospital',
+      name: 'Max Super Speciality Hospital Saket',
+      phone: '+91-11-26515050',
+      telegram_chat_id: '6537122486',
+      address: '1, 2, Press Enclave Marg, Saket, New Delhi 110017',
+    },
+    {
+      email: 'fortis.okhla@hospital.gov.in',
+      password: 'medconnect123',
+      role: 'hospital',
+      name: 'Fortis Escorts Heart Institute Okhla',
+      phone: '+91-11-47135000',
+      telegram_chat_id: '6537122486',
+      address: 'Okhla Road, Sukhdev Vihar Metro Station, New Delhi 110025',
+    },
+    {
+      email: 'apollo.delhi@hospital.gov.in',
+      password: 'medconnect123',
+      role: 'hospital',
+      name: 'Indraprastha Apollo Hospital Jasola',
+      phone: '+91-11-26925858',
+      telegram_chat_id: '6537122486',
+      address: 'Delhi Mathura Road, Sarita Vihar, New Delhi 110076',
     },
     {
       email: 'ananya@patient.medconnect.org',

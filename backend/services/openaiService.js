@@ -31,11 +31,15 @@ export function getOpenAICredentials() {
   return { apiKey: trimmed, isConfigured: Boolean(trimmed) };
 }
 
+// In-memory cooldown cache for quota exhaustion to prevent 6-second timeouts on each turn
+let openaiQuotaExhaustedUntil = 0;
+
 export async function extractIntentAndSlots(transcriptionText) {
   const { apiKey, isConfigured } = getOpenAICredentials();
   const text = (transcriptionText || '').trim();
 
-  if (isConfigured && text) {
+  const now = Date.now();
+  if (isConfigured && text && now > openaiQuotaExhaustedUntil) {
     try {
       const systemPrompt = `You are a medical receptionist NLP parser for an Indian hospital system.
 Parse user utterance (in English, Hindi, or Hinglish) into structured JSON with keys:
@@ -74,7 +78,7 @@ Special guidelines:
           response_format: { type: 'json_object' },
           temperature: 0.1,
         }),
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(2500),
       });
 
       if (response.ok) {
@@ -99,9 +103,13 @@ Special guidelines:
           isConfigured: true,
           status: 'SUCCESS',
         };
+      } else {
+        if (response.status === 429) {
+          openaiQuotaExhaustedUntil = Date.now() + 60000; // Cooldown 60s
+        }
       }
     } catch {
-      // Fall through to deterministic bilingual Indic NLP rules engine
+      // Fall through immediately to deterministic bilingual Indic NLP rules engine
     }
   }
 

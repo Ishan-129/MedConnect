@@ -516,13 +516,13 @@ const server = http.createServer(async (req, res) => {
       const tokenId = body.tokenId || body.token || body.token_number;
       const appointmentId = body.appointmentId || body.id;
       const isCheckInRoute = pathname === '/api/qr/check-in';
-      const action = isCheckInRoute ? 'check_in' : (body.action || 'verify');
-      const passType = body.type || (typeof qrData === 'object' && qrData?.type);
+      const passType = body.type || body.pass_type || (typeof qrData === 'object' && qrData?.type);
+      const action = body.action || (isCheckInRoute ? 'check_in' : 'verify');
 
       // Check-in security policy:
       // 1. User must be logged in OR present an authentic scanned QR pass / check-in URL
       // 2. Patient role without QR code cannot manually check in arbitrary tokens (reserved for staff)
-      if (action === 'check_in') {
+      if (action === 'check_in' && passType !== 'emergency_dispatch') {
         const hasQrPass = Boolean(qrData || (body.sig && (tokenId || appointmentId)));
         if (!user && !hasQrPass) {
           return sendJson(res, 401, {
@@ -545,13 +545,27 @@ const server = http.createServer(async (req, res) => {
       }
 
       let result;
-      if (passType === 'emergency_dispatch') {
+      const isEmergencyPass = passType === 'emergency_dispatch' ||
+        body.type === 'emergency_dispatch' ||
+        body.dispatch_id ||
+        body.dispatchId ||
+        (qrData && (qrData.includes('dispatch_pass') || qrData.includes('dispatch_id') || qrData.includes('PASS-DISP')));
+
+      if (isEmergencyPass) {
         result = await db.verifyAndRedeemDispatchPass({
           qrData,
           dispatchId: body.dispatch_id || body.dispatchId || appointmentId,
+          requestId: body.req_id || body.request_id || body.requestId,
           tokenHash: body.token_hash || body.qr_token_hash || tokenId,
           action,
           user,
+          passDetails: {
+            donor: body.donor || body.donor_hospital_name,
+            requester: body.requester || body.requester_hospital_name,
+            resource: body.resource || body.resource_type,
+            quantity: body.quantity,
+            status: body.status,
+          },
         });
       } else {
         result = await db.verifyAndCheckInAppointment({
@@ -776,6 +790,72 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, statusCode, result);
     }
 
+    if (pathname === '/api/emergency/decline' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      const body = await readBody(req);
+      const requestId = body.request_id || body.requestId;
+      const decliningHospitalId = body.declining_hospital_id || body.hospital_id || (auth.valid && auth.user ? auth.user.id : null);
+      const decliningHospitalName = body.declining_hospital_name || auth.user?.name || 'Regional Hospital';
+      const reason = body.reason || 'OUT_OF_STOCK';
+
+      if (!requestId || !decliningHospitalId) {
+        return sendJson(res, 400, { success: false, error: 'BAD_REQUEST', message: 'Both request_id and declining_hospital_id are required' });
+      }
+
+      const result = await db.declineEmergencyRequest({
+        request_id: requestId,
+        declining_hospital_id: decliningHospitalId,
+        declining_hospital_name: decliningHospitalName,
+        reason,
+      });
+
+      if (result.success) {
+        const nextList = (result.cascaded_to || []).map(h => h.name).join(', ') || 'Remaining Regional Facilities';
+        sendTelegramAlert(
+          `⚠️ <b>MedConnect Pulse — Emergency Alert Cascaded</b>\n\n` +
+          `• <b>Declined By:</b> ${decliningHospitalName} (Stock Unavailable)\n` +
+          `• <b>Request ID:</b> <code>${requestId}</code>\n` +
+          `• <b>Cascading Alert:</b> Re-routed to ${result.cascaded_to_count} regional hospitals\n` +
+          `• <b>Candidate Facilities:</b> ${nextList}\n` +
+          `• <b>Status:</b> URGENT NETWORK RADAR CASCADE ACTIVE`
+        ).catch(() => {});
+      }
+
+      return sendJson(res, result.success ? 200 : 400, result);
+    }
+
+    if (pathname === '/api/emergency/status' && req.method === 'POST') {
+      const body = await readBody(req);
+      const requestId = body.request_id || body.requestId || body.id;
+      const status = body.status;
+      if (!requestId || !status) {
+        return sendJson(res, 400, { success: false, error: 'BAD_REQUEST', message: 'request_id and status are required' });
+      }
+
+      const result = await db.updateEmergencyRequestStatus({ request_id: requestId, status });
+      return sendJson(res, result.success ? 200 : 400, result);
+    }
+
+    if (pathname === '/api/emergency/dispatch' && req.method === 'GET') {
+      const dispatchId = reqUrl.searchParams.get('id') || reqUrl.searchParams.get('dispatch_id');
+      const requestId = reqUrl.searchParams.get('req_id') || reqUrl.searchParams.get('request_id');
+      const tokenHash = reqUrl.searchParams.get('token') || reqUrl.searchParams.get('token_hash');
+      const donor = reqUrl.searchParams.get('donor');
+      const requester = reqUrl.searchParams.get('requester');
+      const resource = reqUrl.searchParams.get('resource');
+      const quantity = reqUrl.searchParams.get('quantity') || reqUrl.searchParams.get('qty');
+      const status = reqUrl.searchParams.get('status');
+
+      const result = await db.verifyAndRedeemDispatchPass({
+        dispatchId,
+        requestId,
+        tokenHash,
+        action: 'verify',
+        passDetails: { donor, requester, resource, quantity, status },
+      });
+      return sendJson(res, result.success ? 200 : 404, result);
+    }
+
     // -------------------------------------------------------------
     // HOSPITAL RESOURCES & INVENTORY (Phase 7 Real DB)
     // -------------------------------------------------------------
@@ -869,10 +949,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname.startsWith('/api/n8n/') || pathname.startsWith('/webhook/')) {
-      const webhookPath = pathname.replace(/^\/api\/n8n\/(?:webhook\/)?/, '').replace(/^\/webhook\//, '');
+      const rawWebhookPath = pathname.replace(/^\/api\/n8n\/(?:webhook\/)?/, '').replace(/^\/webhook\//, '');
       const body = await readBody(req);
       const secret = process.env.N8N_WEBHOOK_SECRET || process.env.VITE_N8N_WEBHOOK_SECRET || 'medconnect-n8n-secret-key';
       const n8nBase = (process.env.N8N_WEBHOOK_URL || 'https://test-medconnect.app.n8n.cloud/webhook').replace(/\/$/, '');
+
+      // Normalize path aliases across README specifications and actual n8n workflows
+      let webhookPath = rawWebhookPath;
+      if (rawWebhookPath === 'receptionist') webhookPath = 'ai-receptionist';
+      if (rawWebhookPath === 'emergency-request') webhookPath = 'emergency-broadcast';
+      if (rawWebhookPath === 'emergency-timeout') webhookPath = 'escalation-timeout-check';
+
       const targetUrl = `${n8nBase}/${webhookPath}`;
 
       try {
@@ -896,18 +983,16 @@ const server = http.createServer(async (req, res) => {
         // Fall through to local execution if available
       }
 
-      // If remote n8n returned 404 or failed and this is AI Receptionist, run verified WF1 workflow
-      if (webhookPath === 'ai-receptionist' || webhookPath === 'medconnect-test') {
-        const { executeWf1Local } = await import('./services/n8nService.js');
-        const localHeaders = {
-          ...req.headers,
-          'x-webhook-secret': req.headers['x-webhook-secret'] || secret,
-          'x-medconnect-secret': req.headers['x-medconnect-secret'] || secret,
-        };
-        const localExec = executeWf1Local(body, localHeaders);
-        if (localExec) {
-          return sendJson(res, localExec.statusCode, localExec.body);
-        }
+      // If remote n8n returned 404 or failed, execute verified local workflow engine
+      const { executeN8nWorkflowLocal } = await import('./services/n8nService.js');
+      const localHeaders = {
+        ...req.headers,
+        'x-webhook-secret': req.headers['x-webhook-secret'] || secret,
+        'x-medconnect-secret': req.headers['x-medconnect-secret'] || secret,
+      };
+      const localExec = executeN8nWorkflowLocal(webhookPath, body, localHeaders);
+      if (localExec) {
+        return sendJson(res, localExec.statusCode, localExec.body);
       }
 
       return sendJson(res, 404, {

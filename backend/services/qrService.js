@@ -127,21 +127,36 @@ export function verifyQRPayload(qrInput) {
       const trimmed = qrInput.trim();
 
       // Check if input is a URL (e.g. from camera scanning a web link)
-      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('checkin') || trimmed.includes('token=')) {
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('checkin') || trimmed.includes('dispatch_pass') || trimmed.includes('dispatch_id') || trimmed.includes('token=')) {
         try {
           const url = new URL(trimmed, 'http://localhost');
-          const token = url.searchParams.get('token') || url.searchParams.get('tokenId') || '';
-          const id = url.searchParams.get('id') || url.searchParams.get('appointmentId') || '';
+          const isDispatchPass = url.searchParams.get('dispatch_pass') === 'true' || url.searchParams.has('dispatch_id') || url.searchParams.has('req_id');
+          const token = url.searchParams.get('token') || url.searchParams.get('tokenId') || url.searchParams.get('token_hash') || '';
+          const dispatchId = url.searchParams.get('dispatch_id') || url.searchParams.get('dispatchId') || '';
+          const requestId = url.searchParams.get('req_id') || url.searchParams.get('request_id') || '';
+          const id = dispatchId || url.searchParams.get('id') || url.searchParams.get('appointmentId') || requestId || '';
           const sig = url.searchParams.get('sig') || url.searchParams.get('signature') || '';
-          const exp = url.searchParams.get('exp') || '';
-          const iat = url.searchParams.get('iat') || '';
-          const type = url.searchParams.get('type') || 'appointment_checkin';
+          const exp = url.searchParams.get('exp') || url.searchParams.get('expires_at') || '';
+          const iat = url.searchParams.get('iat') || url.searchParams.get('issued') || '';
+          const type = isDispatchPass ? 'emergency_dispatch' : (url.searchParams.get('type') || 'appointment_checkin');
 
-          if (token || id) {
+          const cleanToken = isDispatchPass
+            ? token.replace(/^#/, '')
+            : (token ? (token.startsWith('#') ? token : `#${token}`) : '');
+
+          if (token || id || dispatchId || requestId) {
             const data = {
               type,
               id,
-              token: token.startsWith('#') ? token : `#${token}`,
+              dispatch_id: dispatchId || id,
+              request_id: requestId,
+              token: cleanToken || token,
+              raw_token: token,
+              donor: url.searchParams.get('donor') || '',
+              requester: url.searchParams.get('requester') || '',
+              resource: url.searchParams.get('resource') || '',
+              quantity: url.searchParams.get('quantity') || url.searchParams.get('qty') || '',
+              status: url.searchParams.get('status') || '',
               ...(iat ? { iat } : {}),
               ...(exp ? { exp } : {}),
             };
@@ -173,9 +188,14 @@ export function verifyQRPayload(qrInput) {
         }
       }
 
-      // If user typed or scanned a plain token identifier (e.g. #MED-4030 or MED-4030)
+      // If user typed or scanned a plain token identifier (e.g. #MED-4030, MED-4030, or PASS-DISP-781806)
       if (trimmed.startsWith('#') || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
-        return { isRawToken: true, token: trimmed.startsWith('#') ? trimmed : `#${trimmed}` };
+        const isEmergency = trimmed.startsWith('PASS-') || trimmed.startsWith('DISP-') || trimmed.includes('DISP');
+        return {
+          isRawToken: true,
+          token: isEmergency ? trimmed.replace(/^#/, '') : (trimmed.startsWith('#') ? trimmed : `#${trimmed}`),
+          raw_token: trimmed,
+        };
       }
       parsed = JSON.parse(trimmed);
     } else if (typeof qrInput === 'object' && qrInput !== null) {

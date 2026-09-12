@@ -26,31 +26,56 @@ export const HospitalRadarView: React.FC<HospitalRadarViewProps> = ({
   const maxDisplayRadiusKm = 15.0; // 15km corresponds to full radar radius
   const radarInnerRadiusPx = 180;
 
+  // Provide defensive fallback if selectedHospital is not yet resolved
+  const safeSelected: Hospital = useMemo(() => {
+    if (selectedHospital && typeof selectedHospital.latitude === 'number' && typeof selectedHospital.longitude === 'number') {
+      return selectedHospital;
+    }
+    const candidate = allHospitals && allHospitals[0];
+    if (candidate && typeof candidate.latitude === 'number') {
+      return candidate;
+    }
+    return {
+      hospital_id: 'default-aiims',
+      name: 'All India Institute of Medical Sciences (AIIMS) New Delhi',
+      latitude: 28.5672,
+      longitude: 77.2100,
+      contact: '+91-11-26588500',
+      telegram_chat_id: '6537122486',
+      active_status: true,
+      supported_resources: ['O_NEG_BLOOD', 'OXYGEN', 'ICU_BED', 'VENTILATOR', 'AMBULANCE'],
+      distance_km: 0,
+    };
+  }, [selectedHospital, allHospitals]);
+
   // Calculate radar positions for all hospitals relative to selected hospital
   const plottedHospitals = useMemo(() => {
-    return allHospitals.map((hosp) => {
+    return (allHospitals || []).map((hosp) => {
+      if (!hosp || typeof hosp.latitude !== 'number' || typeof hosp.longitude !== 'number') {
+        return null;
+      }
       const distance = calculateDistanceKm(
-        selectedHospital.latitude,
-        selectedHospital.longitude,
+        safeSelected.latitude,
+        safeSelected.longitude,
         hosp.latitude,
         hosp.longitude
       );
 
-      const isCenter = hosp.hospital_id === selectedHospital.hospital_id;
+      const isCenter = hosp.hospital_id === safeSelected.hospital_id;
       const inRange = distance <= radiusKm;
 
       const hasActiveSOS = activeRequests.some(
-        (r) => r.requesting_hospital_id === hosp.hospital_id && r.status === 'OPEN'
+        (r) => r.requesting_hospital_id === hosp.hospital_id && (r.status === 'OPEN' || r.status === 'CREATED' || (r.status as any) === 'BROADCASTED')
       );
 
       let x = center;
       let y = center;
 
       if (!isCenter) {
-        const dLat = hosp.latitude - selectedHospital.latitude;
+        const dLat = hosp.latitude - safeSelected.latitude;
         const dLng =
-          (hosp.longitude - selectedHospital.longitude) *
-          Math.cos(((selectedHospital.latitude + hosp.latitude) / 2) * (Math.PI / 180));
+          (hosp.longitude - safeSelected.longitude) *
+          Math.cos(((safeSelected.latitude + hosp.latitude) / 2) * (Math.PI / 180));
 
         const angleRad = Math.atan2(dLng, dLat); // 0 = North
         const rPx = Math.min(
@@ -71,8 +96,8 @@ export const HospitalRadarView: React.FC<HospitalRadarViewProps> = ({
         radarX: Math.round(x * 10) / 10,
         radarY: Math.round(y * 10) / 10,
       };
-    });
-  }, [selectedHospital, allHospitals, radiusKm, activeRequests, center, radarInnerRadiusPx, maxDisplayRadiusKm]);
+    }).filter(Boolean) as any[];
+  }, [safeSelected, allHospitals, radiusKm, activeRequests, center, radarInnerRadiusPx, maxDisplayRadiusKm]);
 
   const ring5KmPx = (5.0 / maxDisplayRadiusKm) * radarInnerRadiusPx;
   const ring10KmPx = (10.0 / maxDisplayRadiusKm) * radarInnerRadiusPx;

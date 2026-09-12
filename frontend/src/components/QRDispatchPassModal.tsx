@@ -1,6 +1,18 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, ShieldCheck, QrCode, Building2, Truck, Clock, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import {
+  X,
+  ShieldCheck,
+  QrCode,
+  Building2,
+  Truck,
+  Clock,
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  Copy,
+  Check,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface QRDispatchPassModalProps {
@@ -25,19 +37,54 @@ export const QRDispatchPassModal: React.FC<QRDispatchPassModalProps> = ({
   onClose,
   passData,
 }) => {
+  const [copied, setCopied] = useState(false);
+  const [networkBaseUrl, setNetworkBaseUrl] = useState<string>(() => {
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return window.location.origin;
+    }
+    return 'http://172.16.4.90:5173';
+  });
+
+  // Fetch host LAN IP from backend so mobile devices on the same Wi-Fi can open the portal URL
+  useEffect(() => {
+    fetch('/api/network-info')
+      .then((res) => res.json())
+      .then((info) => {
+        if (info.baseUrl) {
+          setNetworkBaseUrl(info.baseUrl);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   if (!isOpen || !passData) return null;
 
-  const qrPayload = JSON.stringify({
-    pass_type: 'EMERGENCY_DISPATCH_HANDOVER',
+  // Direct clickable/scannable URL that opens the MedConnect website portal and displays pass details & live status
+  const params = new URLSearchParams({
+    dispatch_pass: 'true',
     dispatch_id: passData.dispatch_id,
-    request_id: passData.request_id,
-    token_hash: passData.qr_token_hash,
-    resource: passData.resource_type,
-    quantity: passData.quantity,
+    req_id: passData.request_id,
     donor: passData.donor_hospital_name,
     requester: passData.requester_hospital_name,
+    resource: passData.resource_type,
+    quantity: String(passData.quantity),
+    token: passData.qr_token_hash,
+    issued: passData.issued_at,
     exp: passData.expires_at,
+    status: passData.status || 'ACTIVE',
   });
+
+  const portalPassUrl = `${networkBaseUrl}/?${params.toString()}`;
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(portalPassUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleOpenDirectly = () => {
+    window.open(portalPassUrl, '_blank');
+  };
 
   return (
     <AnimatePresence>
@@ -46,10 +93,10 @@ export const QRDispatchPassModal: React.FC<QRDispatchPassModalProps> = ({
           initial={{ opacity: 0, scale: 0.94, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.94, y: 15 }}
-          className="relative w-full max-w-md bg-paper border border-rule rounded-2xl shadow-2xl overflow-hidden"
+          className="relative w-full max-w-md bg-paper border border-rule rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
         >
           {/* Header Banner */}
-          <div className="p-4 bg-gradient-to-r from-red-600 to-red-700 text-white flex items-center justify-between">
+          <div className="p-4 bg-gradient-to-r from-red-600 to-red-700 text-white flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center space-x-2">
               <ShieldCheck className="w-5 h-5 text-white" />
               <div>
@@ -68,12 +115,14 @@ export const QRDispatchPassModal: React.FC<QRDispatchPassModalProps> = ({
           <div className="p-6 space-y-5 text-ink">
             {/* High Contrast QR Code Frame */}
             <div className="flex flex-col items-center justify-center p-5 bg-white rounded-2xl border-2 border-red-500 shadow-lg mx-auto w-fit">
-              <QRCodeSVG
-                value={qrPayload}
-                size={200}
-                level="H"
-                includeMargin={false}
-              />
+              <div className="p-2 bg-white rounded-xl">
+                <QRCodeSVG
+                  value={portalPassUrl}
+                  size={200}
+                  level="M"
+                  includeMargin={false}
+                />
+              </div>
               <div className="mt-3 text-center">
                 <span className="font-mono text-xs font-bold text-slate-900 tracking-wider">
                   #{passData.dispatch_id}
@@ -81,6 +130,29 @@ export const QRDispatchPassModal: React.FC<QRDispatchPassModalProps> = ({
                 <p className="text-[10px] font-mono text-red-600 font-semibold mt-0.5">
                   PRIORITY EMERGENCY LIFE-LINE DISPATCH
                 </p>
+              </div>
+            </div>
+
+            {/* Direct Portal Scan Prompt & Actions */}
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-xl border border-red-200 dark:border-red-900/40 text-center space-y-2">
+              <p className="text-xs font-mono text-red-700 dark:text-red-300 font-medium">
+                📲 <strong>Scan with any phone camera</strong> to open live status & handover portal directly in your browser.
+              </p>
+              <div className="flex items-center justify-center space-x-2 pt-1">
+                <button
+                  onClick={handleOpenDirectly}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-mono font-semibold flex items-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open Portal View</span>
+                </button>
+                <button
+                  onClick={handleCopyLink}
+                  className="px-3 py-1.5 bg-paper hover:bg-paper-subtle border border-rule rounded-lg text-xs font-mono text-ink flex items-center space-x-1.5 shadow-sm transition-all active:scale-95"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? 'Link Copied!' : 'Copy Link'}</span>
+                </button>
               </div>
             </div>
 
@@ -115,8 +187,8 @@ export const QRDispatchPassModal: React.FC<QRDispatchPassModalProps> = ({
             </div>
 
             {/* Validation Instructions */}
-            <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-xl border border-red-200 dark:border-red-900/40 text-[11px] text-red-700 dark:text-red-300 flex items-start space-x-2">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div className="p-3 bg-paper-subtle rounded-xl border border-rule text-[11px] text-ink-muted flex items-start space-x-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-500" />
               <span>
                 <strong>Verification Protocol:</strong> Ambulance driver presents this pass at Donor Blood Bank for pickup scan, and again at Requester Trauma ER upon arrival.
               </span>

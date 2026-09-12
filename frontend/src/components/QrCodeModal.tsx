@@ -57,14 +57,7 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
 
   const checkInUrl = type === 'appointment'
     ? `${networkBaseUrl}/?checkin=true&token=${encodeURIComponent(cleanToken)}&id=${encodeURIComponent(cleanId)}${cleanSig ? `&sig=${encodeURIComponent(cleanSig)}` : ''}`
-    : (data.qrPayload || JSON.stringify({
-        type: 'emergency_dispatch',
-        id: cleanId,
-        token: cleanToken,
-        iat: data.issuedAt,
-        exp: data.expiresAt,
-        sig: cleanSig,
-      }));
+    : `${networkBaseUrl}/?dispatch_pass=true&dispatch_id=${encodeURIComponent(cleanId)}&token=${encodeURIComponent(cleanToken)}${cleanSig ? `&sig=${encodeURIComponent(cleanSig)}` : ''}&issued=${encodeURIComponent(data.issuedAt || '')}&exp=${encodeURIComponent(data.expiresAt || '')}`;
 
   // Focus trap
   useEffect(() => {
@@ -192,47 +185,45 @@ export const QrCodeModal: React.FC<QrModalProps> = ({
                   </p>
                 </div>
 
-                {type === 'appointment' && (
-                  <div className="mt-3 w-full space-y-2">
-                    <div className="p-2 rounded-lg bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-1">
-                      <span className="text-[10px] font-mono text-slate-600 font-bold uppercase tracking-wider flex items-center space-x-1">
-                        <ExternalLink className="w-3 h-3 text-accent" />
-                        <span>Instant Check-In Link</span>
-                      </span>
-                      <a
-                        href={checkInUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[10px] font-mono text-accent hover:underline break-all line-clamp-1"
-                        title={checkInUrl}
-                      >
-                        {checkInUrl}
-                      </a>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 w-full">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(checkInUrl);
-                          setCopiedLink(true);
-                          setTimeout(() => setCopiedLink(false), 2000);
-                        }}
-                        className="pulse-btn pulse-btn-secondary text-[10px] py-1.5 px-2.5 flex-1 flex items-center justify-center space-x-1 font-mono"
-                      >
-                        {copiedLink ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-ink-muted" />}
-                        <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
-                      </button>
-
-                      <a
-                        href={checkInUrl}
-                        className="pulse-btn pulse-btn-primary text-[10px] py-1.5 px-3 flex items-center justify-center space-x-1 font-mono shrink-0"
-                      >
-                        <span>Open Now →</span>
-                      </a>
-                    </div>
+                <div className="mt-3 w-full space-y-2">
+                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-1">
+                    <span className="text-[10px] font-mono text-slate-600 font-bold uppercase tracking-wider flex items-center space-x-1">
+                      <ExternalLink className="w-3 h-3 text-accent" />
+                      <span>{type === 'appointment' ? 'Instant Mobile Check-In Link' : 'Direct Emergency Pass Portal Link'}</span>
+                    </span>
+                    <a
+                      href={checkInUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-mono text-accent hover:underline break-all line-clamp-1"
+                      title={checkInUrl}
+                    >
+                      {checkInUrl}
+                    </a>
                   </div>
-                )}
+
+                  <div className="flex items-center gap-1.5 w-full">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(checkInUrl);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 2000);
+                      }}
+                      className="pulse-btn pulse-btn-secondary text-[10px] py-1.5 px-2.5 flex-1 flex items-center justify-center space-x-1 font-mono"
+                    >
+                      {copiedLink ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-ink-muted" />}
+                      <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
+                    </button>
+
+                    <a
+                      href={checkInUrl}
+                      className="pulse-btn pulse-btn-primary text-[10px] py-1.5 px-3 flex items-center justify-center space-x-1 font-mono shrink-0"
+                    >
+                      <span>Open Now →</span>
+                    </a>
+                  </div>
+                </div>
               </div>
 
               {/* Clinical Telemetry & Metadata Strip */}

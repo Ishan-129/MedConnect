@@ -383,8 +383,17 @@ export const AuthModal: React.FC = () => {
                           onClick={async () => {
                             setIsLoading(true);
                             setErrorMsg(null);
-                            const email = h.contact_email || h.contact || h.hospital_id;
-                            const res = await loginHospital(email, hospLoginPass || 'medconnect123');
+                            let targetIdentifier = h.contact_email;
+                            if (!targetIdentifier) {
+                              const nm = h.name.toLowerCase();
+                              if (nm.includes('aiims')) targetIdentifier = 'aiims@hospital.gov.in';
+                              else if (nm.includes('safdarjung')) targetIdentifier = 'safdarjung@hospital.gov.in';
+                              else if (nm.includes('max')) targetIdentifier = 'max.saket@hospital.gov.in';
+                              else if (nm.includes('fortis')) targetIdentifier = 'fortis.okhla@hospital.gov.in';
+                              else if (nm.includes('apollo')) targetIdentifier = 'apollo.delhi@hospital.gov.in';
+                              else targetIdentifier = h.contact || h.hospital_id;
+                            }
+                            const res = await loginHospital(targetIdentifier, hospLoginPass || 'medconnect123');
                             setIsLoading(false);
                             if (res.success) {
                               setSuccessMsg(`Authenticated as ${h.name.split(' ')[0]}`);

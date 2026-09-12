@@ -1,0 +1,401 @@
+{
+  "name": "MEDCONNECT | WF11 | ESCALATION TIMEOUT",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-watchdog",
+      "name": "Schedule Watchdog Every 30s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "escalation-timeout-check",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-manual-webhook",
+      "name": "Manual Escalation Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "url": "https://wardqchtmympitfhifqy.supabase.co/rest/v1/emergency_requests?status=eq.OPEN&created_at=lt.{{ new Date(Date.now() - 180000).toISOString() }}&select=*",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-query-unanswered",
+      "name": "Query Unanswered Timed-Out Requests",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.id || $json.request_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-has-expired",
+      "name": "Has Expired Requests?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const itemsList = typeof $input !== 'undefined' ? $input.all() : (typeof items !== 'undefined' ? items : []);\nif (!itemsList || itemsList.length === 0 || !itemsList[0].json || !itemsList[0].json.id) {\n  return [];\n}\n\nconst timeoutSec = 180;\nconst TWILIO_TO_NUMBER = '+919354543523';\nconst TWILIO_FROM_NUMBER = '+17372212163';\nconst ESCALATED_RADIUS_KM = 15;\n\nreturn itemsList.map(item => {\n  const data = item.json;\n  const requestId = data.request_id || data.id || 'REQ-UNKNOWN';\n  const hospitalName = (data.hospitals && data.hospitals.name) || data.requesting_hospital_name || data.hospital_name || 'Hospital Facility';\n  const resourceType = data.resource_type || 'Critical Resources';\n  const quantity = data.quantity || 1;\n  const originalRadius = Number(data.radius_km) || 10;\n  \n  const twiml = `<Response><Say voice=\"alice\">Emergency Escalation Alert from MedConnect Pulse. Hospital ${hospitalName} has an unfulfilled critical request for ${quantity} units of ${resourceType}. The 3 minute response window has timed out. Immediate regional coordinator intervention required.</Say></Response>`;\n\n  return {\n    json: {\n      ...data,\n      request_id: requestId,\n      original_radius_km: originalRadius,\n      radius_km: ESCALATED_RADIUS_KM,\n      radius_expanded: true,\n      status: 'ESCALATED',\n      escalated_at: new Date().toISOString(),\n      twilio_to: TWILIO_TO_NUMBER,\n      twilio_from: TWILIO_FROM_NUMBER,\n      twilio_twiml: twiml,\n      alert_message: `Emergency Escalation: Hospital ${hospitalName} needs ${quantity} ${resourceType}. Radius expanded to 15km.`,\n      exception_details: {\n        workflow: 'WF11_ESCALATION_TIMEOUT',\n        record_id: requestId,\n        error_type: 'TIMEOUT_UNACCEPTED',\n        severity: 'CRITICAL',\n        owner: 'REGIONAL_COORDINATOR'\n      }\n    }\n  };\n});"
+      },
+      "id": "node-expand-radius",
+      "name": "Expand Radius to 15km & Prepare Twilio Voice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 380]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://wardqchtmympitfhifqy.supabase.co/rest/v1/emergency_requests?request_id=eq.{{ $json.request_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "ESCALATED"
+            },
+            {
+              "name": "radius_km",
+              "value": "={{ $json.radius_km }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-update-status",
+      "name": "Update Status to ESCALATED in Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/ACmock_account_sid/Calls.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "={{ $json.twilio_to }}"
+            },
+            {
+              "name": "From",
+              "value": "={{ $json.twilio_from }}"
+            },
+            {
+              "name": "Twiml",
+              "value": "={{ $json.twilio_twiml }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-dispatch-twilio",
+      "name": "Dispatch Twilio Automated Voice Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wardqchtmympitfhifqy.supabase.co/rest/v1/exceptions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.exception_details) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-insert-exception",
+      "name": "Insert Critical Exception in exception_log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wardqchtmympitfhifqy.supabase.co/rest/v1/audit_trail",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: 'VOICE_CALL_DISPATCHED', entity: 'emergency_requests', record_id: $json.request_id, details: { to: $json.twilio_to, status: 'DISPATCHED' }, timestamp: new Date().toISOString() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-log-voice",
+      "name": "Log Voice Call in communication_log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1880, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wardqchtmympitfhifqy.supabase.co/rest/v1/rpc/log_audit_event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhcmRxY2h0bXltcGl0ZmhpZnF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1Mjg5MzcsImV4cCI6MjEwNDEwNDkzN30.QSs7JFsju2CBy02GS8YDrk2wile9RAwS6R840FJE8FM"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_action: 'TIMEOUT_ESCALATION_TRIGGERED', p_entity: 'emergency_requests', p_record_id: $json.request_id, p_details: { expanded_radius_km: $json.radius_km } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-audit-trail",
+      "name": "Write Immutable Audit Trail (log_audit_event)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2120, 380]
+    }
+  ],
+  "connections": {
+    "Schedule Watchdog Every 30s": {
+      "main": [
+        [
+          {
+            "node": "Query Unanswered Timed-Out Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Escalation Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Query Unanswered Timed-Out Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Unanswered Timed-Out Requests": {
+      "main": [
+        [
+          {
+            "node": "Has Expired Requests?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Expired Requests?": {
+      "main": [
+        [
+          {
+            "node": "Expand Radius to 15km & Prepare Twilio Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Radius to 15km & Prepare Twilio Voice": {
+      "main": [
+        [
+          {
+            "node": "Update Status to ESCALATED in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status to ESCALATED in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Twilio Automated Voice Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Twilio Automated Voice Call": {
+      "main": [
+        [
+          {
+            "node": "Insert Critical Exception in exception_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Critical Exception in exception_log": {
+      "main": [
+        [
+          {
+            "node": "Log Voice Call in communication_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Voice Call in communication_log": {
+      "main": [
+        [
+          {
+            "node": "Write Immutable Audit Trail (log_audit_event)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
+}

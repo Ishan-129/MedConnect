@@ -34,3 +34,58 @@ html, body {
   border-color: var(--color-rule);
 }
 
+/* ==========================================================================
+   CREATIVE TRANSPORTATION MAP ANIMATIONS & STYLES
+   ========================================================================== */
+
+/* Animated flow along polyline path */
+@keyframes leafletRouteDash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.leaflet-route-flow {
+  animation: leafletRouteDash 1.2s linear infinite;
+}
+
+/* Dual Emergency Strobe Beacon (Red & Blue flashing) */
+@keyframes strobeRed {
+  0%, 100% { opacity: 1; transform: scale(1); filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.9)); }
+  50% { opacity: 0.2; transform: scale(0.85); filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0)); }
+}
+
+@keyframes strobeBlue {
+  0%, 100% { opacity: 0.2; transform: scale(0.85); filter: drop-shadow(0 0 0px rgba(59, 130, 246, 0)); }
+  50% { opacity: 1; transform: scale(1); filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.9)); }
+}
+
+.animate-strobe-red {
+  animation: strobeRed 0.45s ease-in-out infinite;
+}
+
+.animate-strobe-blue {
+  animation: strobeBlue 0.45s ease-in-out infinite;
+}
+
+/* Floating Cargo Hologram Pod */
+@keyframes hologramFloat {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-hologram-float {
+  animation: hologramFloat 2.5s ease-in-out infinite;
+}
+
+/* Radar Sweep Pulse Ring */
+@keyframes radarSweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.animate-radar-sweep {
+  animation: radarSweep 6s linear infinite;
+  transform-origin: center center;
+}
+
